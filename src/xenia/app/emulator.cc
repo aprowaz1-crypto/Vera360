@@ -610,15 +610,27 @@ void Emulator::Tick() {
 
   frame_count_++;
 
-  // ── Step 1: Execute PPC instructions (round-robin scheduler) ────────
+  // ── Step 1: Check if all threads terminated ────────────────────────
+  if (kernel_state_ && kernel_state_->GetActiveThreadCount() == 0 &&
+      !kernel_state_->GetAllThreads().empty()) {
+    auto* main = kernel_state_->GetAllThreads().front();
+    if (main && main->is_terminated()) {
+      XELOGI("All threads terminated (exit_code={})", main->exit_code());
+      running_ = false;
+      return;
+    }
+  }
+
+  // ── Step 2: Execute PPC instructions (round-robin scheduler) ────────
   if (processor_ && kernel_state_) {
     const auto& threads = kernel_state_->GetAllThreads();
     size_t thread_count = threads.size();
     if (thread_count > 0) {
       // Give each runnable thread a time slice
       size_t start_idx = kernel_state_->current_thread_index();
-      uint32_t instructions_per_thread = kInstructionsPerTick / std::max(size_t(1),
-          kernel_state_->GetActiveThreadCount());
+      size_t active = kernel_state_->GetActiveThreadCount();
+      uint32_t instructions_per_thread = active > 0
+          ? kInstructionsPerTick / static_cast<uint32_t>(active) : 0;
       if (instructions_per_thread < 1000) instructions_per_thread = 1000;
 
       for (size_t i = 0; i < thread_count; ++i) {

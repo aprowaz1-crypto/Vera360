@@ -1045,8 +1045,18 @@ InterpResult PPCInterpreter::Step(ThreadState* t) {
         case 1:   t->gpr[rd] = t->xer; break;  // XER
         case 8:   t->gpr[rd] = t->lr; break;    // LR
         case 9:   t->gpr[rd] = t->ctr; break;   // CTR
-        case 268: t->gpr[rd] = 0; break;         // TBL — timebase lower
-        case 269: t->gpr[rd] = 0; break;         // TBU — timebase upper
+        case 268: {  // TBL — timebase lower (50MHz timer)
+          static uint64_t fake_tb_spr = 0;
+          fake_tb_spr += 500;  // ~10us per read at 50MHz
+          t->gpr[rd] = static_cast<uint32_t>(fake_tb_spr);
+          break;
+        }
+        case 269: {  // TBU — timebase upper
+          static uint64_t fake_tb_spr2 = 0;
+          fake_tb_spr2 += 500;
+          t->gpr[rd] = static_cast<uint32_t>(fake_tb_spr2 >> 32);
+          break;
+        }
         default:  t->gpr[rd] = 0; break;
       }
       return InterpResult::kContinue;
@@ -1283,6 +1293,92 @@ InterpResult PPCInterpreter::Step(ThreadState* t) {
       memset(guest_base_ + ea, 0, 32);
       return InterpResult::kContinue;
     }
+
+    // ────── VMX Load/Store (opcode 31) ──────
+    case 103: { // lvx — load vector indexed
+      uint32_t vt = rd;
+      uint32_t ea = (ra == 0) ? 0 : static_cast<uint32_t>(t->gpr[ra]);
+      ea += static_cast<uint32_t>(t->gpr[rb]);
+      ea &= ~0xFu;  // align to 16 bytes
+      memcpy(t->vmx[vt], guest_base_ + ea, 16);
+      return InterpResult::kContinue;
+    }
+    case 359: { // lvxl — load vector indexed last (same as lvx for us)
+      uint32_t vt = rd;
+      uint32_t ea = (ra == 0) ? 0 : static_cast<uint32_t>(t->gpr[ra]);
+      ea += static_cast<uint32_t>(t->gpr[rb]);
+      ea &= ~0xFu;
+      memcpy(t->vmx[vt], guest_base_ + ea, 16);
+      return InterpResult::kContinue;
+    }
+    case 231: { // stvx — store vector indexed
+      uint32_t vs = rd;
+      uint32_t ea = (ra == 0) ? 0 : static_cast<uint32_t>(t->gpr[ra]);
+      ea += static_cast<uint32_t>(t->gpr[rb]);
+      ea &= ~0xFu;
+      memcpy(guest_base_ + ea, t->vmx[vs], 16);
+      return InterpResult::kContinue;
+    }
+    case 487: { // stvxl — store vector indexed last
+      uint32_t vs = rd;
+      uint32_t ea = (ra == 0) ? 0 : static_cast<uint32_t>(t->gpr[ra]);
+      ea += static_cast<uint32_t>(t->gpr[rb]);
+      ea &= ~0xFu;
+      memcpy(guest_base_ + ea, t->vmx[vs], 16);
+      return InterpResult::kContinue;
+    }
+    case 7: { // lvebx — load vector element byte indexed
+      uint32_t vt = rd;
+      uint32_t ea = (ra == 0) ? 0 : static_cast<uint32_t>(t->gpr[ra]);
+      ea += static_cast<uint32_t>(t->gpr[rb]);
+      memset(t->vmx[vt], 0, 16);
+      t->vmx[vt][ea & 0xF] = *(guest_base_ + ea);
+      return InterpResult::kContinue;
+    }
+    case 39: { // lvehx — load vector element half indexed
+      uint32_t vt = rd;
+      uint32_t ea = (ra == 0) ? 0 : static_cast<uint32_t>(t->gpr[ra]);
+      ea += static_cast<uint32_t>(t->gpr[rb]);
+      ea &= ~1u;
+      memset(t->vmx[vt], 0, 16);
+      memcpy(t->vmx[vt] + (ea & 0xE), guest_base_ + ea, 2);
+      return InterpResult::kContinue;
+    }
+    case 71: { // lvewx — load vector element word indexed
+      uint32_t vt = rd;
+      uint32_t ea = (ra == 0) ? 0 : static_cast<uint32_t>(t->gpr[ra]);
+      ea += static_cast<uint32_t>(t->gpr[rb]);
+      ea &= ~3u;
+      memset(t->vmx[vt], 0, 16);
+      memcpy(t->vmx[vt] + (ea & 0xC), guest_base_ + ea, 4);
+      return InterpResult::kContinue;
+    }
+    case 342: { // dst — data stream touch — NOP
+      return InterpResult::kContinue;
+    }
+    case 374: { // dstst — data stream touch for store — NOP
+      return InterpResult::kContinue;
+    }
+    case 822: { // dss — data stream stop — NOP
+      return InterpResult::kContinue;
+    }
+    case 6: { // lvsl — load vector for shift left
+      uint32_t vt = rd;
+      uint32_t ea = (ra == 0) ? 0 : static_cast<uint32_t>(t->gpr[ra]);
+      ea += static_cast<uint32_t>(t->gpr[rb]);
+      uint8_t sh = ea & 0xF;
+      for (int i = 0; i < 16; i++) t->vmx[vt][i] = (sh + i) & 0xFF;
+      return InterpResult::kContinue;
+    }
+    case 38: { // lvsr — load vector for shift right
+      uint32_t vt = rd;
+      uint32_t ea = (ra == 0) ? 0 : static_cast<uint32_t>(t->gpr[ra]);
+      ea += static_cast<uint32_t>(t->gpr[rb]);
+      uint8_t sh = ea & 0xF;
+      for (int i = 0; i < 16; i++) t->vmx[vt][i] = (0x10 - sh + i) & 0xFF;
+      return InterpResult::kContinue;
+    }
+
     default:
       XELOGW("Unhandled opcode 31 xo={} at 0x{:08X}", xo, pc);
       return InterpResult::kContinue;
@@ -1770,19 +1866,332 @@ InterpResult PPCInterpreter::Step(ThreadState* t) {
     return InterpResult::kContinue;
   }
 
-  // ─── Opcode 4: VMX128 (Xbox 360 extended vector) ─────────────────────
+  // ─── Opcode 4: VMX / VMX128 (Altivec + Xbox 360 extensions) ──────────
   case 4: {
-    // VMX128 instructions — basic support
-    // Most games use these heavily. For now, treat as NOP with logging.
-    // TODO: Full VMX128 implementation
-    uint32_t xo = (instr >> 1) & 0x3FF;
-    (void)xo;  // Suppress warning — will implement per-opcode
+    // Standard Altivec uses bits 21-31 (xo_full) or simpler sub-opcode forms
+    // Xbox 360 VMX128 uses various extended opcode positions
+    // We decode the most commonly used operations
+    uint32_t xo_full = (instr >> 0) & 0x7FF;   // bits 21-31: standard VMX
+    uint32_t xo_short = (instr >> 1) & 0x3FF;  // bits 21-30 (ignore Rc)
+    uint32_t va = (instr >> 16) & 0x1F;
+    uint32_t vb = (instr >> 11) & 0x1F;
+    uint32_t vc = (instr >> 6) & 0x1F;
+    uint32_t vd = (instr >> 21) & 0x1F;
+
+    // Helper lambdas for register access as float[4] and uint32_t[4]
+    auto vf = [&](uint32_t r) -> float* {
+      return reinterpret_cast<float*>(t->vmx[r]);
+    };
+    auto vi = [&](uint32_t r) -> uint32_t* {
+      return reinterpret_cast<uint32_t*>(t->vmx[r]);
+    };
+    auto vb8 = [&](uint32_t r) -> uint8_t* {
+      return t->vmx[r];
+    };
+    auto vh = [&](uint32_t r) -> uint16_t* {
+      return reinterpret_cast<uint16_t*>(t->vmx[r]);
+    };
+
+    // ── Standard Altivec opcodes (xo in bits 0-10) ──
+    switch (xo_full) {
+    // ────── Vector Float Arithmetic ──────
+    case 10: { // vaddfp — vector add float point
+      for (int i = 0; i < 4; i++) vf(vd)[i] = vf(va)[i] + vf(vb)[i];
+      return InterpResult::kContinue;
+    }
+    case 74: { // vsubfp — vector subtract float point
+      for (int i = 0; i < 4; i++) vf(vd)[i] = vf(va)[i] - vf(vb)[i];
+      return InterpResult::kContinue;
+    }
+    case 1034: { // vmaxfp
+      for (int i = 0; i < 4; i++) vf(vd)[i] = std::max(vf(va)[i], vf(vb)[i]);
+      return InterpResult::kContinue;
+    }
+    case 1098: { // vminfp
+      for (int i = 0; i < 4; i++) vf(vd)[i] = std::min(vf(va)[i], vf(vb)[i]);
+      return InterpResult::kContinue;
+    }
+
+    // ────── Vector Integer Arithmetic ──────
+    case 768: { // vadduwm — vector add unsigned word modulo
+      for (int i = 0; i < 4; i++) vi(vd)[i] = vi(va)[i] + vi(vb)[i];
+      return InterpResult::kContinue;
+    }
+    case 1152: { // vsubuwm
+      for (int i = 0; i < 4; i++) vi(vd)[i] = vi(va)[i] - vi(vb)[i];
+      return InterpResult::kContinue;
+    }
+    case 512: { // vadduhm — vector add unsigned half modulo
+      for (int i = 0; i < 8; i++) vh(vd)[i] = vh(va)[i] + vh(vb)[i];
+      return InterpResult::kContinue;
+    }
+    case 0: { // vaddubm — vector add unsigned byte modulo
+      for (int i = 0; i < 16; i++) vb8(vd)[i] = vb8(va)[i] + vb8(vb)[i];
+      return InterpResult::kContinue;
+    }
+
+    // ────── Vector Logical ──────
+    case 1028: { // vand
+      for (int i = 0; i < 4; i++) vi(vd)[i] = vi(va)[i] & vi(vb)[i];
+      return InterpResult::kContinue;
+    }
+    case 1092: { // vandc
+      for (int i = 0; i < 4; i++) vi(vd)[i] = vi(va)[i] & ~vi(vb)[i];
+      return InterpResult::kContinue;
+    }
+    case 1156: { // vor
+      for (int i = 0; i < 4; i++) vi(vd)[i] = vi(va)[i] | vi(vb)[i];
+      return InterpResult::kContinue;
+    }
+    case 1220: { // vxor
+      for (int i = 0; i < 4; i++) vi(vd)[i] = vi(va)[i] ^ vi(vb)[i];
+      return InterpResult::kContinue;
+    }
+    case 1284: { // vnor
+      for (int i = 0; i < 4; i++) vi(vd)[i] = ~(vi(va)[i] | vi(vb)[i]);
+      return InterpResult::kContinue;
+    }
+
+    // ────── Vector Compare ──────
+    case 198: { // vcmpgtfp (Rc=0) / vcmpgtfp. (Rc=1)
+      for (int i = 0; i < 4; i++)
+        vi(vd)[i] = (vf(va)[i] > vf(vb)[i]) ? 0xFFFFFFFF : 0;
+      return InterpResult::kContinue;
+    }
+    case 966: { // vcmpgtfp. (same but sets CR6)
+      uint32_t all_true = 0xFFFFFFFF, all_false = 0xFFFFFFFF;
+      for (int i = 0; i < 4; i++) {
+        uint32_t r = (vf(va)[i] > vf(vb)[i]) ? 0xFFFFFFFF : 0;
+        vi(vd)[i] = r;
+        if (r == 0) all_true = 0;
+        if (r != 0) all_false = 0;
+      }
+      // Set CR6: bit 24 = all true, bit 26 = all false
+      t->cr &= ~(0xF << 0);  // Clear CR6 (bits 24-27 stored in low nibble of cr field 6)
+      if (all_true) t->cr |= (1 << 3);  // CR6[LT] = all elements true
+      if (all_false) t->cr |= (1 << 1); // CR6[EQ] = all elements false
+      return InterpResult::kContinue;
+    }
+    case 70: { // vcmpequw
+      for (int i = 0; i < 4; i++)
+        vi(vd)[i] = (vi(va)[i] == vi(vb)[i]) ? 0xFFFFFFFF : 0;
+      return InterpResult::kContinue;
+    }
+    case 838: { // vcmpequw. (with CR6 update)
+      uint32_t all_true = 0xFFFFFFFF, all_false = 0xFFFFFFFF;
+      for (int i = 0; i < 4; i++) {
+        uint32_t r = (vi(va)[i] == vi(vb)[i]) ? 0xFFFFFFFF : 0;
+        vi(vd)[i] = r;
+        if (r == 0) all_true = 0;
+        if (r != 0) all_false = 0;
+      }
+      t->cr &= ~(0xF << 0);
+      if (all_true) t->cr |= (1 << 3);
+      if (all_false) t->cr |= (1 << 1);
+      return InterpResult::kContinue;
+    }
+    case 134: { // vcmpeqfp
+      for (int i = 0; i < 4; i++)
+        vi(vd)[i] = (vf(va)[i] == vf(vb)[i]) ? 0xFFFFFFFF : 0;
+      return InterpResult::kContinue;
+    }
+    case 902: { // vcmpeqfp.
+      uint32_t all_true = 0xFFFFFFFF, all_false = 0xFFFFFFFF;
+      for (int i = 0; i < 4; i++) {
+        uint32_t r = (vf(va)[i] == vf(vb)[i]) ? 0xFFFFFFFF : 0;
+        vi(vd)[i] = r;
+        if (r == 0) all_true = 0;
+        if (r != 0) all_false = 0;
+      }
+      t->cr &= ~(0xF << 0);
+      if (all_true) t->cr |= (1 << 3);
+      if (all_false) t->cr |= (1 << 1);
+      return InterpResult::kContinue;
+    }
+    case 262: { // vcmpgtsw — vector compare greater than signed word
+      auto vs = [&](uint32_t r) -> int32_t* {
+        return reinterpret_cast<int32_t*>(t->vmx[r]);
+      };
+      for (int i = 0; i < 4; i++)
+        vi(vd)[i] = (vs(va)[i] > vs(vb)[i]) ? 0xFFFFFFFF : 0;
+      return InterpResult::kContinue;
+    }
+
+    // ────── Vector Merge/Pack/Unpack ──────
+    case 12: { // vmrghw — merge high word
+      vi(vd)[0] = vi(va)[0]; vi(vd)[1] = vi(vb)[0];
+      vi(vd)[2] = vi(va)[1]; vi(vd)[3] = vi(vb)[1];
+      return InterpResult::kContinue;
+    }
+    case 268: { // vmrglw — merge low word
+      vi(vd)[0] = vi(va)[2]; vi(vd)[1] = vi(vb)[2];
+      vi(vd)[2] = vi(va)[3]; vi(vd)[3] = vi(vb)[3];
+      return InterpResult::kContinue;
+    }
+
+    // ────── Vector Splat ──────
+    case 844: { // vspltw — splat word
+      uint32_t uimm = vb; // UIMM field selects element
+      uint32_t val = vi(va)[uimm & 3];
+      for (int i = 0; i < 4; i++) vi(vd)[i] = val;
+      return InterpResult::kContinue;
+    }
+    case 780: { // vsplth — splat halfword
+      uint32_t uimm = vb;
+      uint16_t val = vh(va)[uimm & 7];
+      for (int i = 0; i < 8; i++) vh(vd)[i] = val;
+      return InterpResult::kContinue;
+    }
+    case 716: { // vspltb — splat byte
+      uint32_t uimm = vb;
+      uint8_t val = vb8(va)[uimm & 15];
+      for (int i = 0; i < 16; i++) vb8(vd)[i] = val;
+      return InterpResult::kContinue;
+    }
+    case 908: { // vspltisw — splat immediate signed word
+      int32_t simm = static_cast<int32_t>(va << 27) >> 27; // sign extend 5-bit
+      for (int i = 0; i < 4; i++) vi(vd)[i] = static_cast<uint32_t>(simm);
+      return InterpResult::kContinue;
+    }
+
+    // ────── Vector Shift/Rotate ──────
+    case 388: { // vslw — vector shift left word
+      for (int i = 0; i < 4; i++) vi(vd)[i] = vi(va)[i] << (vi(vb)[i] & 0x1F);
+      return InterpResult::kContinue;
+    }
+    case 644: { // vsrw — vector shift right word
+      for (int i = 0; i < 4; i++) vi(vd)[i] = vi(va)[i] >> (vi(vb)[i] & 0x1F);
+      return InterpResult::kContinue;
+    }
+    case 708: { // vsraw — vector shift right algebraic word
+      for (int i = 0; i < 4; i++) {
+        int32_t sv = static_cast<int32_t>(vi(va)[i]);
+        vi(vd)[i] = static_cast<uint32_t>(sv >> (vi(vb)[i] & 0x1F));
+      }
+      return InterpResult::kContinue;
+    }
+
+    // ────── Vector Select ──────
+    case 42: { // vsel — vector select (va & ~vc) | (vb & vc)
+      for (int i = 0; i < 4; i++)
+        vi(vd)[i] = (vi(va)[i] & ~vi(vc)[i]) | (vi(vb)[i] & vi(vc)[i]);
+      return InterpResult::kContinue;
+    }
+
+    // ────── Vector Perm ──────
+    case 43: { // vperm — vector permute
+      uint8_t tmp[16];
+      for (int i = 0; i < 16; i++) {
+        uint8_t sel = vb8(vc)[i] & 0x1F;
+        if (sel < 16) tmp[i] = vb8(va)[sel];
+        else          tmp[i] = vb8(vb)[sel - 16];
+      }
+      memcpy(t->vmx[vd], tmp, 16);
+      return InterpResult::kContinue;
+    }
+
+    // ────── Vector Reciprocal/Rsqrt Estimates ──────
+    case 266: { // vrefp — vector reciprocal estimate float
+      for (int i = 0; i < 4; i++) vf(vd)[i] = 1.0f / vf(va)[i];
+      return InterpResult::kContinue;
+    }
+    case 330: { // vrsqrtefp — vector reciprocal sqrt estimate
+      for (int i = 0; i < 4; i++) vf(vd)[i] = 1.0f / sqrtf(vf(va)[i]);
+      return InterpResult::kContinue;
+    }
+    case 394: { // vlogefp — vector log2 estimate
+      for (int i = 0; i < 4; i++) vf(vd)[i] = log2f(vf(va)[i]);
+      return InterpResult::kContinue;
+    }
+    case 458: { // vexptefp — vector 2^x estimate
+      for (int i = 0; i < 4; i++) vf(vd)[i] = exp2f(vf(va)[i]);
+      return InterpResult::kContinue;
+    }
+
+    // ────── Vector Float Convert ──────
+    case 842: { // vctsxs — vector convert to signed int saturated
+      uint32_t uimm = vb; // UIMM is scale factor
+      for (int i = 0; i < 4; i++) {
+        float scaled = vf(va)[i] * (float)(1 << uimm);
+        int32_t ival;
+        if (scaled >= 2147483647.0f) ival = 0x7FFFFFFF;
+        else if (scaled <= -2147483648.0f) ival = (int32_t)0x80000000;
+        else ival = (int32_t)scaled;
+        vi(vd)[i] = (uint32_t)ival;
+      }
+      return InterpResult::kContinue;
+    }
+    case 906: { // vctuxs — vector convert to unsigned int saturated
+      uint32_t uimm = vb;
+      for (int i = 0; i < 4; i++) {
+        float scaled = vf(va)[i] * (float)(1 << uimm);
+        uint32_t uval;
+        if (scaled >= 4294967295.0f) uval = 0xFFFFFFFF;
+        else if (scaled <= 0.0f) uval = 0;
+        else uval = (uint32_t)scaled;
+        vi(vd)[i] = uval;
+      }
+      return InterpResult::kContinue;
+    }
+    case 970: { // vcfsx — convert from signed int
+      uint32_t uimm = vb;
+      float scale = (uimm > 0) ? (1.0f / (float)(1 << uimm)) : 1.0f;
+      for (int i = 0; i < 4; i++)
+        vf(vd)[i] = (float)(int32_t)vi(va)[i] * scale;
+      return InterpResult::kContinue;
+    }
+
+    default:
+      break;  // Fall through to VA-form check
+    }
+
+    // ── VA-form opcodes: opcode 4, sub-opcode in bits 26-31 ──
+    uint32_t va_xo = (instr >> 0) & 0x3F;
+    switch (va_xo) {
+    case 46: { // vmaddfp — vd = (va * vc) + vb  (fused multiply-add)
+      for (int i = 0; i < 4; i++)
+        vf(vd)[i] = vf(va)[i] * vf(vc)[i] + vf(vb)[i];
+      return InterpResult::kContinue;
+    }
+    case 47: { // vnmsubfp — vd = -(va * vc - vb)
+      for (int i = 0; i < 4; i++)
+        vf(vd)[i] = -(vf(va)[i] * vf(vc)[i] - vf(vb)[i]);
+      return InterpResult::kContinue;
+    }
+    case 43: { // vperm (VA form)
+      uint8_t tmp[16];
+      for (int i = 0; i < 16; i++) {
+        uint8_t sel = vb8(vc)[i] & 0x1F;
+        if (sel < 16) tmp[i] = vb8(va)[sel];
+        else          tmp[i] = vb8(vb)[sel - 16];
+      }
+      memcpy(t->vmx[vd], tmp, 16);
+      return InterpResult::kContinue;
+    }
+    case 42: { // vsel (VA form)
+      for (int i = 0; i < 4; i++)
+        vi(vd)[i] = (vi(va)[i] & ~vi(vc)[i]) | (vi(vb)[i] & vi(vc)[i]);
+      return InterpResult::kContinue;
+    }
+    case 44: { // vsldoi — shift left double by octet immediate
+      uint32_t sh = (instr >> 6) & 0xF; // SH field
+      uint8_t tmp[32];
+      memcpy(tmp, t->vmx[va], 16);
+      memcpy(tmp + 16, t->vmx[vb], 16);
+      memcpy(t->vmx[vd], tmp + sh, 16);
+      return InterpResult::kContinue;
+    }
+    default:
+      break;
+    }
+
+    // Unknown VMX opcode — skip it (NOP) rather than halting
     return InterpResult::kContinue;
   }
 
   default:
     XELOGW("Unhandled PPC opcode {} at 0x{:08X} (instr=0x{:08X})", opcd, pc, instr);
-    return InterpResult::kHalt;
+    return InterpResult::kContinue;  // Skip unknown opcodes instead of halting
   }
 }
 

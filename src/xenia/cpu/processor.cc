@@ -62,6 +62,11 @@ void Processor::RegisterThunk(uint32_t guest_addr, uint32_t ordinal) {
 }
 
 ThreadState* Processor::CreateThreadState(uint32_t thread_id) {
+  // Look up existing thread state first
+  for (auto& ts : thread_states_) {
+    if (ts->thread_id == thread_id) return ts.get();
+  }
+
   auto ts = std::make_unique<ThreadState>();
   ts->thread_id = thread_id;
   // Xbox 360 stack grows down from 0x70000000 region, 1MB per thread

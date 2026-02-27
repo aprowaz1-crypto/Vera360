@@ -573,12 +573,18 @@ bool Xex2Loader::ResolveImports(uint8_t* guest_base,
         //   sc                   ; 0x44000002 (syscall → HLE dispatch)
         //   blr                  ; 0x4E800020 (return to caller)
         // All stored in big-endian.
-        uint32_t li_r0 = __builtin_bswap32(0x38000000 | (dispatch_ordinal & 0xFFFF));
+        // Use full dispatch_ordinal: lis r0,hi ; ori r0,r0,lo ; sc ; blr
+        // This ensures XAM ordinals (0x10000+) are preserved in r0
+        uint32_t hi = (dispatch_ordinal >> 16) & 0xFFFF;
+        uint32_t lo = dispatch_ordinal & 0xFFFF;
+        uint32_t lis_r0  = __builtin_bswap32(0x3C000000 | hi);       // lis r0, hi
+        uint32_t ori_r0  = __builtin_bswap32(0x60000000 | lo);       // ori r0, r0, lo
         uint32_t sc_instr = __builtin_bswap32(0x44000002);
         uint32_t blr_instr = __builtin_bswap32(0x4E800020);
-        memcpy(thunk,     &li_r0, 4);
-        memcpy(thunk + 4, &sc_instr, 4);
-        memcpy(thunk + 8, &blr_instr, 4);
+        memcpy(thunk,      &lis_r0, 4);
+        memcpy(thunk + 4,  &ori_r0, 4);
+        memcpy(thunk + 8,  &sc_instr, 4);
+        memcpy(thunk + 12, &blr_instr, 4);
 
         // Register thunk address with the CPU processor so the interpreter
         // can fast-path dispatch without actually executing the stub
