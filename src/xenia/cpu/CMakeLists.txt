@@ -5,6 +5,7 @@ add_library(xe_cpu STATIC
     frontend/ppc_decoder.cc
     frontend/ppc_disasm.cc
     frontend/ppc_scanner.cc
+    frontend/ppc_interpreter.cc
     backend/arm64/arm64_emitter.cc
     backend/arm64/arm64_backend.cc
     backend/arm64/arm64_sequences.cc

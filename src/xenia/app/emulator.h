@@ -3,7 +3,7 @@
  * Emulator — top-level orchestrator
  *
  * Owns and initialises every subsystem, loads an XEX, and runs the
- * main emulation loop.
+ * main emulation loop with Vulkan rendering and PPC interpretation.
  */
 #pragma once
 
@@ -14,8 +14,19 @@
 
 struct ANativeWindow;
 
-namespace xe::kernel {
-class KernelState;
+namespace xe::cpu { class Processor; }
+namespace xe::kernel { class KernelState; }
+namespace xe::gpu {
+  class GpuCommandProcessor;
+  namespace vulkan {
+    class VulkanInstance;
+    class VulkanDevice;
+    class VulkanSwapChain;
+    class VulkanCommandProcessor;
+    class VulkanPipelineCache;
+    class VulkanRenderTargetCache;
+    class VulkanTextureCache;
+  }
 }
 
 namespace xe {
@@ -56,6 +67,9 @@ class Emulator {
   bool InitApu();
   bool InitHid();
 
+  /// Kernel HLE dispatch — called when guest executes sc
+  void DispatchKernelCall(uint32_t ordinal, void* thread_state);
+
   /// Game loading helpers
   bool LoadXex(const std::string& path, std::ifstream& file,
                std::streampos file_size);
@@ -69,7 +83,17 @@ class Emulator {
   int surface_width_ = 0;
   int surface_height_ = 0;
 
+  // Subsystems
+  std::unique_ptr<cpu::Processor> processor_;
   kernel::KernelState* kernel_state_ = nullptr;
+  std::unique_ptr<gpu::vulkan::VulkanInstance> vulkan_instance_;
+  std::unique_ptr<gpu::vulkan::VulkanDevice> vulkan_device_;
+  std::unique_ptr<gpu::vulkan::VulkanSwapChain> vulkan_swap_chain_;
+  std::unique_ptr<gpu::GpuCommandProcessor> gpu_command_processor_;
+  ANativeWindow* native_window_ = nullptr;
+
+  /// Instructions executed per tick (budget per frame ~16ms)
+  static constexpr uint64_t kInstructionsPerTick = 500000;
 };
 
 }  // namespace xe

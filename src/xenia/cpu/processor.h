@@ -1,14 +1,19 @@
 /**
  * Vera360 — Xenia Edge
- * CPU Processor — manages PPC emulation and JIT compilation
+ * CPU Processor — manages PPC emulation via interpreter and ARM64 JIT
  */
+#pragma once
 
 #include "xenia/cpu/backend/arm64/arm64_backend.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/memory/memory.h"
 
+#include <functional>
 #include <memory>
+#include <unordered_map>
 #include <vector>
+
+namespace xe::cpu::frontend { class PPCInterpreter; }
 
 namespace xe::cpu {
 
@@ -40,6 +45,18 @@ struct ThreadState {
   // Reservation (for lwarx/stwcx atomic ops)
   uint32_t reserve_address = 0;
   bool reserve_valid = false;
+
+  // Running flag — set to false to stop execution
+  bool running = true;
+};
+
+/// HLE kernel export callback: (thread_state, ordinal)
+using KernelDispatchFn = std::function<void(ThreadState*, uint32_t)>;
+
+/// Execution mode
+enum class ExecMode : uint8_t {
+  kInterpreter = 0,
+  kJIT,
 };
 
 class Processor {
@@ -47,8 +64,15 @@ class Processor {
   Processor();
   ~Processor();
 
-  bool Initialize();
+  bool Initialize(uint8_t* guest_base = nullptr,
+                  ExecMode mode = ExecMode::kInterpreter);
   void Shutdown();
+
+  /// Set the kernel HLE dispatch (called for sc instructions / thunks)
+  void SetKernelDispatch(KernelDispatchFn fn);
+
+  /// Register an HLE thunk at guest_addr for given ordinal
+  void RegisterThunk(uint32_t guest_addr, uint32_t ordinal);
 
   /// Create a new thread state
   ThreadState* CreateThreadState(uint32_t thread_id);
@@ -56,14 +80,23 @@ class Processor {
   /// Execute guest code starting at address on given thread
   void Execute(ThreadState* thread, uint32_t start_address);
 
+  /// Execute a bounded number of instructions (interp only) — returns count
+  uint64_t ExecuteBounded(ThreadState* thread, uint32_t start_address,
+                          uint64_t max_instructions);
+
   /// Step one instruction (for debugging)
   void Step(ThreadState* thread);
 
   backend::arm64::ARM64Backend* GetBackend() { return backend_.get(); }
+  ExecMode exec_mode() const { return exec_mode_; }
 
  private:
+  ExecMode exec_mode_ = ExecMode::kInterpreter;
+  uint8_t* guest_base_ = nullptr;
   std::unique_ptr<backend::arm64::ARM64Backend> backend_;
+  std::unique_ptr<frontend::PPCInterpreter> interpreter_;
   std::vector<std::unique_ptr<ThreadState>> thread_states_;
+  KernelDispatchFn kernel_dispatch_;
 };
 
 }  // namespace xe::cpu

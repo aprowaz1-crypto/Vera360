@@ -255,6 +255,9 @@ class Xex2Loader {
   
   /// Resolve imports against kernel exports
   bool ResolveImports(uint8_t* guest_base);
+
+  /// Resolve imports and register thunks with the CPU processor
+  bool ResolveImports(uint8_t* guest_base, xe::cpu::Processor* processor);
   
   /// Get the parsed module info
   const XexModule& module() const { return module_; }

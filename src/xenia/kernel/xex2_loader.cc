@@ -9,6 +9,7 @@
 #include "xenia/kernel/xex2_loader.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/memory/memory.h"
+#include "xenia/cpu/processor.h"
 
 #include <algorithm>
 #include <cstring>
@@ -490,50 +491,81 @@ bool Xex2Loader::MapIntoMemory(uint8_t* guest_base) {
 }
 
 bool Xex2Loader::ResolveImports(uint8_t* guest_base) {
+  return ResolveImports(guest_base, nullptr);
+}
+
+bool Xex2Loader::ResolveImports(uint8_t* guest_base,
+                                xe::cpu::Processor* processor) {
   uint32_t resolved = 0;
   uint32_t unresolved = 0;
-  
+  uint32_t variables = 0;
+
   for (auto& lib : module_.import_libs) {
     bool is_xboxkrnl = (lib.name.find("xboxkrnl") != std::string::npos);
     bool is_xam = (lib.name.find("xam") != std::string::npos);
-    
+    uint32_t lib_resolved = 0;
+
     for (auto& record : lib.records) {
       // Import record format:
       // Bit 31: 1 = variable, 0 = function
       // Bits 0-15: ordinal
       bool is_variable = (record & 0x80000000) != 0;
       uint32_t ordinal = record & 0xFFFF;
-      
-      // Write a BRK instruction as thunk (syscall trap)
-      // The BRK immediate encodes the ordinal for dispatch
-      if (!is_variable) {
-        // Function import: find the thunk address in guest memory
-        // The thunk is written at the import record address
-        uint32_t thunk_addr = record & 0x7FFFFFFF;
-        if (thunk_addr >= module_.base_address &&
-            thunk_addr < module_.base_address + module_.image_size) {
-          uint8_t* thunk = guest_base + thunk_addr;
-          // Write: BRK #ordinal (ARM64 encoding)
-          // Actually, we need PPC-style thunk since guest runs PPC:
-          // sc (syscall) instruction = 0x44000002
-          uint32_t sc_instr = __builtin_bswap32(0x44000002);
-          memcpy(thunk, &sc_instr, 4);
-          // Store ordinal info in r0 before sc
-          // li r0, ordinal = 0x38000000 | (ordinal & 0xFFFF)
-          uint32_t li_r0 = __builtin_bswap32(0x38000000 | (ordinal & 0xFFFF));
-          // Write: li r0, ordinal; sc
-          memcpy(thunk, &li_r0, 4);
-          memcpy(thunk + 4, &sc_instr, 4);
-          resolved++;
+
+      // Mark ordinals from XAM with high bit to distinguish from xboxkrnl
+      uint32_t dispatch_ordinal = ordinal;
+      if (is_xam) dispatch_ordinal |= 0x10000;
+
+      if (is_variable) {
+        // Variable import — write a stub value (pointer to 0)
+        uint32_t var_addr = record & 0x7FFFFFFF;
+        if (var_addr >= module_.base_address &&
+            var_addr < module_.base_address + module_.image_size) {
+          // Write a null pointer as the variable value (big-endian)
+          uint32_t zero_be = 0;
+          memcpy(guest_base + var_addr, &zero_be, 4);
+          variables++;
         }
+        continue;
+      }
+
+      // Function import: write PPC thunk stub at the import address
+      uint32_t thunk_addr = record & 0x7FFFFFFF;
+      if (thunk_addr >= module_.base_address &&
+          thunk_addr < module_.base_address + module_.image_size) {
+        uint8_t* thunk = guest_base + thunk_addr;
+
+        // Write a 3-instruction PPC thunk:
+        //   li r0, ordinal       ; 0x38000000 | (ordinal & 0xFFFF)
+        //   sc                   ; 0x44000002 (syscall → HLE dispatch)
+        //   blr                  ; 0x4E800020 (return to caller)
+        // All stored in big-endian.
+        uint32_t li_r0 = __builtin_bswap32(0x38000000 | (dispatch_ordinal & 0xFFFF));
+        uint32_t sc_instr = __builtin_bswap32(0x44000002);
+        uint32_t blr_instr = __builtin_bswap32(0x4E800020);
+        memcpy(thunk,     &li_r0, 4);
+        memcpy(thunk + 4, &sc_instr, 4);
+        memcpy(thunk + 8, &blr_instr, 4);
+
+        // Register thunk address with the CPU processor so the interpreter
+        // can fast-path dispatch without actually executing the stub
+        if (processor) {
+          processor->RegisterThunk(thunk_addr, dispatch_ordinal);
+        }
+
+        lib_resolved++;
+        resolved++;
+      } else {
+        unresolved++;
       }
     }
-    
-    XELOGD("XEX2: {} — resolved {}/{} imports",
-           lib.name, resolved, lib.records.size());
+
+    XELOGD("XEX2: {} — resolved {}/{} imports ({} variables)",
+           lib.name, lib_resolved, lib.records.size(), variables);
   }
-  
-  XELOGI("XEX2: Import resolution: {} resolved, {} unresolved", resolved, unresolved);
+
+  XELOGI("XEX2: Import resolution: {} resolved, {} unresolved, {} variables",
+         resolved, unresolved, variables);
   return true;
 }
 

@@ -14,6 +14,7 @@
 #include "xenia/app/emulator.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/platform_android.h"
+#include "xenia/hid/hid_android.h"
 
 // Global emulator instance
 static std::unique_ptr<xe::Emulator> g_emulator;
@@ -106,21 +107,20 @@ Java_com_vera360_ax360e_NativeBridge_nativeSurfaceDestroyed(
 JNIEXPORT void JNICALL
 Java_com_vera360_ax360e_NativeBridge_nativeSetButton(
     JNIEnv* /*env*/, jclass /*clazz*/, jint pad, jint button, jboolean pressed) {
-  // Forward to HID
-  // xe::hid::SetButton(pad, static_cast<uint16_t>(button), pressed);
+  xe::hid::SetButton(pad, static_cast<uint16_t>(button), pressed);
 }
 
 JNIEXPORT void JNICALL
 Java_com_vera360_ax360e_NativeBridge_nativeSetAnalog(
     JNIEnv* /*env*/, jclass /*clazz*/, jint pad, jboolean left,
     jfloat x, jfloat y) {
-  // xe::hid::SetAnalog(pad, left, x, y);
+  xe::hid::SetAnalog(pad, left, x, y);
 }
 
 JNIEXPORT void JNICALL
 Java_com_vera360_ax360e_NativeBridge_nativeSetTrigger(
     JNIEnv* /*env*/, jclass /*clazz*/, jint pad, jboolean left, jfloat value) {
-  // xe::hid::SetTrigger(pad, left, value);
+  xe::hid::SetTrigger(pad, left, value);
 }
 
 // ──────────────────────────── Queries ─────────────────────────────
