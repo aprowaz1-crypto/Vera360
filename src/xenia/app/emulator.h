@@ -112,8 +112,16 @@ class Emulator {
   VkShaderModule passthrough_vs_ = VK_NULL_HANDLE;
   VkShaderModule passthrough_ps_ = VK_NULL_HANDLE;
   VkPipelineLayout vk_pipeline_layout_ = VK_NULL_HANDLE;
+  VkPipeline vk_draw_pipeline_ = VK_NULL_HANDLE;
   VkPipeline vk_clear_pipeline_ = VK_NULL_HANDLE;
   VkDescriptorSetLayout vk_desc_set_layout_ = VK_NULL_HANDLE;
+
+  // Staging vertex/index buffers for draw calls
+  VkBuffer vk_staging_vb_ = VK_NULL_HANDLE;
+  VkDeviceMemory vk_staging_vb_mem_ = VK_NULL_HANDLE;
+  VkBuffer vk_staging_ib_ = VK_NULL_HANDLE;
+  VkDeviceMemory vk_staging_ib_mem_ = VK_NULL_HANDLE;
+  static constexpr uint32_t kStagingBufferSize = 4 * 1024 * 1024; // 4MB each
 
   /// Instructions executed per tick (budget per frame ~16ms)
   static constexpr uint64_t kInstructionsPerTick = 500000;

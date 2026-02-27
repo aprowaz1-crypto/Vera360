@@ -294,20 +294,61 @@ class ShaderTranslator {
     XELOGI("Translating shader: type={}, dwords={}",
             static_cast<int>(type), dword_count);
 
+    // Analyze microcode to determine used resources
+    AnalyzeMicrocode(microcode, dword_count, result);
+
     if (type == ShaderType::kVertex) {
-      result.spirv_code = BuildVertexShader(microcode, dword_count);
+      result.spirv_code = BuildVertexShader(microcode, dword_count, result);
     } else {
-      result.spirv_code = BuildPixelShader(microcode, dword_count);
+      result.spirv_code = BuildPixelShader(microcode, dword_count, result);
     }
     result.valid = !result.spirv_code.empty();
     return result;
   }
 
  private:
-  // ── Build a passthrough vertex shader ──────────────────────────────────
-  // Takes position from vertex buffer, passes texcoord to fragment
-  std::vector<uint32_t> BuildVertexShader(const uint32_t* /*ucode*/,
-                                           uint32_t /*dword_count*/) {
+  /// Scan microcode to determine what resources and exports it uses
+  void AnalyzeMicrocode(const uint32_t* ucode, uint32_t dword_count,
+                         TranslatedShader& shader) {
+    if (!ucode || dword_count < 3) return;
+
+    uint32_t num_instructions = dword_count / 3;
+    for (uint32_t i = 0; i < num_instructions; i++) {
+      uint32_t w0 = ucode[i * 3 + 0];
+      uint32_t w1 = ucode[i * 3 + 1];
+      uint32_t w2 = ucode[i * 3 + 2];
+
+      uint32_t inst_type = w0 & 0x1;
+
+      if (inst_type == ucode::kFetchInstruction) {
+        uint32_t fetch_op = w0 & 0x1F;
+        if (fetch_op == ucode::kFetchTexture) {
+          uint32_t sampler_slot = (w0 >> 8) & 0x1F;
+          shader.used_textures |= (1u << sampler_slot);
+        }
+      } else {
+        // ALU instruction — check for constant register references
+        // Scalar src reg (bits 12-19 of w2)
+        uint32_t scalar_src = (w2 >> 12) & 0xFF;
+        if (scalar_src > shader.used_constants)
+          shader.used_constants = scalar_src;
+        // Vector src regs
+        uint32_t vec_src_a = (w1 >> 0) & 0xFF;
+        uint32_t vec_src_b = (w1 >> 8) & 0xFF;
+        if (vec_src_a > shader.used_constants)
+          shader.used_constants = vec_src_a;
+        if (vec_src_b > shader.used_constants)
+          shader.used_constants = vec_src_b;
+      }
+    }
+  }
+
+  // ── Build vertex shader ────────────────────────────────────────────────
+  // Reads vertex position, passes through to gl_Position
+  // If microcode uses textures, also passes texcoord
+  std::vector<uint32_t> BuildVertexShader(const uint32_t* ucode,
+                                           uint32_t dword_count,
+                                           const TranslatedShader& info) {
     SpirvBuilder b;
     b.EmitHeader();
 
@@ -394,10 +435,11 @@ class ShaderTranslator {
     return b.Finalize();
   }
 
-  // ── Build a passthrough pixel shader ───────────────────────────────────
-  // Samples texture at v_texcoord, outputs color
-  std::vector<uint32_t> BuildPixelShader(const uint32_t* /*ucode*/,
-                                          uint32_t /*dword_count*/) {
+  // ── Build pixel shader ──────────────────────────────────────────────
+  // If microcode uses textures, samples texture; otherwise outputs solid color
+  std::vector<uint32_t> BuildPixelShader(const uint32_t* ucode,
+                                          uint32_t dword_count,
+                                          const TranslatedShader& info) {
     SpirvBuilder b;
     b.EmitHeader();
 

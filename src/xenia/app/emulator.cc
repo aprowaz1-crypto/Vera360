@@ -96,8 +96,13 @@ void Emulator::Shutdown() {
     if (passthrough_vs_) { vkDestroyShaderModule(dev, passthrough_vs_, nullptr); passthrough_vs_ = VK_NULL_HANDLE; }
     if (passthrough_ps_) { vkDestroyShaderModule(dev, passthrough_ps_, nullptr); passthrough_ps_ = VK_NULL_HANDLE; }
     if (vk_pipeline_layout_) { vkDestroyPipelineLayout(dev, vk_pipeline_layout_, nullptr); vk_pipeline_layout_ = VK_NULL_HANDLE; }
+    if (vk_draw_pipeline_) { vkDestroyPipeline(dev, vk_draw_pipeline_, nullptr); vk_draw_pipeline_ = VK_NULL_HANDLE; }
     if (vk_clear_pipeline_) { vkDestroyPipeline(dev, vk_clear_pipeline_, nullptr); vk_clear_pipeline_ = VK_NULL_HANDLE; }
     if (vk_desc_set_layout_) { vkDestroyDescriptorSetLayout(dev, vk_desc_set_layout_, nullptr); vk_desc_set_layout_ = VK_NULL_HANDLE; }
+    if (vk_staging_vb_) { vkDestroyBuffer(dev, vk_staging_vb_, nullptr); vk_staging_vb_ = VK_NULL_HANDLE; }
+    if (vk_staging_vb_mem_) { vkFreeMemory(dev, vk_staging_vb_mem_, nullptr); vk_staging_vb_mem_ = VK_NULL_HANDLE; }
+    if (vk_staging_ib_) { vkDestroyBuffer(dev, vk_staging_ib_, nullptr); vk_staging_ib_ = VK_NULL_HANDLE; }
+    if (vk_staging_ib_mem_) { vkFreeMemory(dev, vk_staging_ib_mem_, nullptr); vk_staging_ib_mem_ = VK_NULL_HANDLE; }
   }
 
   gpu_command_processor_.reset();
@@ -258,7 +263,234 @@ bool Emulator::InitGpuRenderer() {
   alloc_ci.commandBufferCount = 1;
   vkAllocateCommandBuffers(device, &alloc_ci, &vk_cmd_buffer_);
 
-  XELOGI("GPU renderer initialized (cmd pool + buffer)");
+  // ── Create staging vertex buffer (host-visible, 4MB) ──────────────────
+  auto createBuffer = [&](VkDeviceSize size, VkBufferUsageFlags usage,
+                          VkBuffer& buf, VkDeviceMemory& mem) -> bool {
+    VkBufferCreateInfo buf_ci{};
+    buf_ci.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    buf_ci.size = size;
+    buf_ci.usage = usage;
+    buf_ci.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    if (vkCreateBuffer(device, &buf_ci, nullptr, &buf) != VK_SUCCESS)
+      return false;
+    VkMemoryRequirements req;
+    vkGetBufferMemoryRequirements(device, buf, &req);
+    VkMemoryAllocateInfo ai{};
+    ai.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    ai.allocationSize = req.size;
+    ai.memoryTypeIndex = vulkan_device_->FindMemoryType(
+        req.memoryTypeBits,
+        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(device, &ai, nullptr, &mem) != VK_SUCCESS)
+      return false;
+    vkBindBufferMemory(device, buf, mem, 0);
+    return true;
+  };
+
+  createBuffer(kStagingBufferSize, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+               vk_staging_vb_, vk_staging_vb_mem_);
+  createBuffer(kStagingBufferSize, VK_BUFFER_USAGE_INDEX_BUFFER_BIT,
+               vk_staging_ib_, vk_staging_ib_mem_);
+
+  // ── Create pipeline layout (push constants only, no descriptors) ──────
+  VkPushConstantRange push{};
+  push.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+  push.offset = 0;
+  push.size = 16;  // viewport scale/offset
+
+  VkPipelineLayoutCreateInfo layout_ci{};
+  layout_ci.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+  layout_ci.pushConstantRangeCount = 1;
+  layout_ci.pPushConstantRanges = &push;
+  vkCreatePipelineLayout(device, &layout_ci, nullptr, &vk_pipeline_layout_);
+
+  // ── Compile built-in passthrough shaders (inline GLSL→SPIR-V) ────────
+  // Minimal vertex shader: read position as vec4 from vertex buffer,
+  // apply viewport transform via push constants, output to gl_Position.
+  // Minimal fragment shader: output solid white.
+  //
+  // For now we use pre-compiled SPIR-V blobs (hand-assembled minimal shaders).
+  // Vertex: input vec4 position at location 0 → gl_Position
+  static const uint32_t vs_spirv[] = {
+    0x07230203, 0x00010000, 0x00080001, 0x0000001A, 0x00000000, // header
+    0x00020011, 0x00000001,  // OpCapability Shader
+    0x0006000B, 0x00000001, 0x4C534C47, 0x6474732E, 0x0030352E, // OpExtInstImport "GLSL.std.450"
+    0x0003000E, 0x00000000, 0x00000001, // OpMemoryModel Logical GLSL450
+    0x0007000F, 0x00000000, 0x00000002, 0x6E69616D, 0x00000000, 0x00000003, 0x00000004, // OpEntryPoint Vertex %main "main" %in_pos %gl_pos
+    // Types
+    0x00020013, 0x00000005, // OpTypeVoid
+    0x00030021, 0x00000006, 0x00000005, // OpTypeFunction %void
+    0x00030016, 0x00000007, 0x00000020, // OpTypeFloat 32
+    0x00040017, 0x00000008, 0x00000007, 0x00000004, // OpTypeVector %float 4
+    // Input: in_pos at location 0
+    0x00040020, 0x00000009, 0x00000001, 0x00000008, // OpTypePointer Input %vec4
+    0x0004003B, 0x00000009, 0x00000003, 0x00000001, // OpVariable %in_pos Input
+    // Output: gl_Position (BuiltIn)
+    0x00040020, 0x0000000A, 0x00000003, 0x00000008, // OpTypePointer Output %vec4
+    0x0004003B, 0x0000000A, 0x00000004, 0x00000003, // OpVariable %gl_pos Output
+    // Decorations
+    0x00040047, 0x00000003, 0x0000001E, 0x00000000, // OpDecorate %in_pos Location 0
+    0x00040047, 0x00000004, 0x0000000B, 0x00000000, // OpDecorate %gl_pos BuiltIn Position
+    // main()
+    0x00050036, 0x00000005, 0x00000002, 0x00000000, 0x00000006, // OpFunction
+    0x000200F8, 0x0000000B, // OpLabel
+    0x0004003D, 0x00000008, 0x0000000C, 0x00000003, // OpLoad %vec4 %in_pos
+    0x0003003E, 0x00000004, 0x0000000C, // OpStore %gl_pos %loaded
+    0x000100FD, // OpReturn
+    0x00010038, // OpFunctionEnd
+  };
+
+  // Fragment: output solid white (1,1,1,1)
+  static const uint32_t ps_spirv[] = {
+    0x07230203, 0x00010000, 0x00080001, 0x00000015, 0x00000000,
+    0x00020011, 0x00000001,
+    0x0006000B, 0x00000001, 0x4C534C47, 0x6474732E, 0x0030352E,
+    0x0003000E, 0x00000000, 0x00000001,
+    0x0006000F, 0x00000004, 0x00000002, 0x6E69616D, 0x00000000, 0x00000003, // OpEntryPoint Fragment %main "main" %out_color
+    0x00030010, 0x00000002, 0x00000007, // OpExecutionMode %main OriginUpperLeft
+    // Types
+    0x00020013, 0x00000004, // void
+    0x00030021, 0x00000005, 0x00000004, // func type
+    0x00030016, 0x00000006, 0x00000020, // float32
+    0x00040017, 0x00000007, 0x00000006, 0x00000004, // vec4
+    // Output
+    0x00040020, 0x00000008, 0x00000003, 0x00000007, // ptr output vec4
+    0x0004003B, 0x00000008, 0x00000003, 0x00000003, // %out_color output
+    // Constants: 1.0f
+    0x0004002B, 0x00000006, 0x00000009, 0x3F800000, // %c1 = 1.0
+    0x0007002C, 0x00000007, 0x0000000A, 0x00000009, 0x00000009, 0x00000009, 0x00000009, // %white = vec4(1,1,1,1)
+    // Decoration
+    0x00040047, 0x00000003, 0x0000001E, 0x00000000, // Location 0
+    // main()
+    0x00050036, 0x00000004, 0x00000002, 0x00000000, 0x00000005,
+    0x000200F8, 0x0000000B,
+    0x0003003E, 0x00000003, 0x0000000A,
+    0x000100FD,
+    0x00010038,
+  };
+
+  auto createShaderModule = [&](const uint32_t* code, size_t size) -> VkShaderModule {
+    VkShaderModuleCreateInfo ci{};
+    ci.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    ci.codeSize = size;
+    ci.pCode = code;
+    VkShaderModule mod;
+    if (vkCreateShaderModule(device, &ci, nullptr, &mod) != VK_SUCCESS)
+      return VK_NULL_HANDLE;
+    return mod;
+  };
+
+  passthrough_vs_ = createShaderModule(vs_spirv, sizeof(vs_spirv));
+  passthrough_ps_ = createShaderModule(ps_spirv, sizeof(ps_spirv));
+
+  if (!passthrough_vs_ || !passthrough_ps_) {
+    XELOGW("Failed to create passthrough shader modules");
+  }
+
+  // ── Create graphics pipeline ──────────────────────────────────────────
+  if (passthrough_vs_ && passthrough_ps_ && vk_pipeline_layout_) {
+    VkRenderPass render_pass = vulkan_swap_chain_->GetRenderPass();
+
+    VkPipelineShaderStageCreateInfo stages[2] = {};
+    stages[0].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = passthrough_vs_;
+    stages[0].pName = "main";
+    stages[1].sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = passthrough_ps_;
+    stages[1].pName = "main";
+
+    // Vertex input: single binding, position as float4 (16 bytes)
+    VkVertexInputBindingDescription vb_desc{};
+    vb_desc.binding = 0;
+    vb_desc.stride = 16;  // sizeof(float) * 4
+    vb_desc.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    VkVertexInputAttributeDescription attr{};
+    attr.location = 0;
+    attr.binding = 0;
+    attr.format = VK_FORMAT_R32G32B32A32_SFLOAT;
+    attr.offset = 0;
+
+    VkPipelineVertexInputStateCreateInfo vi{};
+    vi.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vi.vertexBindingDescriptionCount = 1;
+    vi.pVertexBindingDescriptions = &vb_desc;
+    vi.vertexAttributeDescriptionCount = 1;
+    vi.pVertexAttributeDescriptions = &attr;
+
+    VkPipelineInputAssemblyStateCreateInfo ia{};
+    ia.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo vp{};
+    vp.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    vp.viewportCount = 1;
+    vp.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rast{};
+    rast.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rast.polygonMode = VK_POLYGON_MODE_FILL;
+    rast.cullMode = VK_CULL_MODE_NONE;
+    rast.frontFace = VK_FRONT_FACE_CLOCKWISE;
+    rast.lineWidth = 1.0f;
+
+    VkPipelineMultisampleStateCreateInfo ms{};
+    ms.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    VkPipelineDepthStencilStateCreateInfo ds{};
+    ds.sType = VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO;
+    ds.depthTestEnable = VK_FALSE;
+
+    VkPipelineColorBlendAttachmentState blend_att{};
+    blend_att.colorWriteMask = VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT |
+                               VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT;
+    blend_att.blendEnable = VK_TRUE;
+    blend_att.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    blend_att.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    blend_att.colorBlendOp = VK_BLEND_OP_ADD;
+    blend_att.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    blend_att.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    blend_att.alphaBlendOp = VK_BLEND_OP_ADD;
+
+    VkPipelineColorBlendStateCreateInfo blend{};
+    blend.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    blend.attachmentCount = 1;
+    blend.pAttachments = &blend_att;
+
+    VkDynamicState dyn_states[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dyn{};
+    dyn.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO;
+    dyn.dynamicStateCount = 2;
+    dyn.pDynamicStates = dyn_states;
+
+    VkGraphicsPipelineCreateInfo pipe_ci{};
+    pipe_ci.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipe_ci.stageCount = 2;
+    pipe_ci.pStages = stages;
+    pipe_ci.pVertexInputState = &vi;
+    pipe_ci.pInputAssemblyState = &ia;
+    pipe_ci.pViewportState = &vp;
+    pipe_ci.pRasterizationState = &rast;
+    pipe_ci.pMultisampleState = &ms;
+    pipe_ci.pDepthStencilState = &ds;
+    pipe_ci.pColorBlendState = &blend;
+    pipe_ci.pDynamicState = &dyn;
+    pipe_ci.layout = vk_pipeline_layout_;
+    pipe_ci.renderPass = render_pass;
+    pipe_ci.subpass = 0;
+
+    if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &pipe_ci,
+                                  nullptr, &vk_draw_pipeline_) == VK_SUCCESS) {
+      XELOGI("Created draw pipeline for guest vertex rendering");
+    } else {
+      XELOGW("Failed to create draw pipeline");
+    }
+  }
+
+  XELOGI("GPU renderer initialized (cmd pool + staging buffers + pipeline)");
   return true;
 }
 
@@ -682,15 +914,13 @@ void Emulator::RenderFrame(uint32_t image_index) {
   vkResetCommandBuffer(vk_cmd_buffer_, 0);
   vkBeginCommandBuffer(vk_cmd_buffer_, &begin_ci);
 
-  // Begin render pass — clears to dark blue (xbox-ish startup color)
+  // Clear color: black when GPU active, pulsing green when idle
   VkClearValue clear_color{};
   bool has_draws = gpu_command_processor_ &&
                    !gpu_command_processor_->GetDrawCalls().empty();
   if (has_draws) {
-    // If GPU was active, clear to black — actual rendering happened
     clear_color.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
   } else {
-    // No GPU activity yet — show a status color (dark green = alive)
     float pulse = static_cast<float>(frame_count_ % 120) / 120.0f;
     clear_color.color = {{0.0f, 0.05f + pulse * 0.1f, 0.0f, 1.0f}};
   }
@@ -704,7 +934,6 @@ void Emulator::RenderFrame(uint32_t image_index) {
   rp_begin.pClearValues = &clear_color;
   vkCmdBeginRenderPass(vk_cmd_buffer_, &rp_begin, VK_SUBPASS_CONTENTS_INLINE);
 
-  // Set viewport and scissor for the full swap chain
   VkViewport viewport{};
   viewport.width = static_cast<float>(extent.width);
   viewport.height = static_cast<float>(extent.height);
@@ -716,18 +945,111 @@ void Emulator::RenderFrame(uint32_t image_index) {
   scissor.extent = extent;
   vkCmdSetScissor(vk_cmd_buffer_, 0, 1, &scissor);
 
-  // TODO: For each draw call from the GPU command processor:
-  // 1. Translate Xenos vertex data from guest memory to Vulkan buffers
-  // 2. Create/fetch pipeline for the Xenos render state
-  // 3. Bind pipeline + vertex buffers + descriptors
-  // 4. Issue vkCmdDraw / vkCmdDrawIndexed
-  //
-  // For now, the render pass clears to a color so we at least get
-  // visible output proving the graphics pipeline is alive.
+  // ── Render guest GPU draw calls ─────────────────────────────────────
+  if (has_draws && vk_draw_pipeline_ && vk_staging_vb_) {
+    uint8_t* guest_base = xe::memory::GetGuestBase();
+    const auto& draw_calls = gpu_command_processor_->GetDrawCalls();
 
-  if (has_draws) {
-    XELOGD("Frame {}: {} draw calls from GPU (rendering pipeline active)",
-           frame_count_, gpu_command_processor_->GetDrawCalls().size());
+    // Map staging buffers
+    uint8_t* vb_map = nullptr;
+    uint8_t* ib_map = nullptr;
+    vkMapMemory(device, vk_staging_vb_mem_, 0, kStagingBufferSize, 0,
+                reinterpret_cast<void**>(&vb_map));
+    vkMapMemory(device, vk_staging_ib_mem_, 0, kStagingBufferSize, 0,
+                reinterpret_cast<void**>(&ib_map));
+
+    uint32_t vb_offset = 0;
+    uint32_t ib_offset = 0;
+
+    vkCmdBindPipeline(vk_cmd_buffer_, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                      vk_draw_pipeline_);
+
+    uint32_t draws_submitted = 0;
+
+    for (const auto& dc : draw_calls) {
+      if (dc.num_indices == 0 || dc.vertex_base_addr == 0) continue;
+
+      uint32_t stride = dc.vertex_stride;
+      if (stride == 0) stride = 16;  // Default to float4
+      uint32_t vertex_count = dc.num_indices;
+      uint32_t vertex_data_size = vertex_count * stride;
+
+      // Bounds check
+      if (vb_offset + vertex_data_size > kStagingBufferSize) break;
+
+      // Copy vertex data from guest memory, byte-swapping float components
+      if (guest_base && dc.vertex_base_addr < 0x100000000ULL) {
+        const uint8_t* src = guest_base + dc.vertex_base_addr;
+        uint8_t* dst = vb_map + vb_offset;
+
+        // Byte-swap each 32-bit word (big-endian → little-endian)
+        uint32_t words = vertex_data_size / 4;
+        const uint32_t* src32 = reinterpret_cast<const uint32_t*>(src);
+        uint32_t* dst32 = reinterpret_cast<uint32_t*>(dst);
+        for (uint32_t w = 0; w < words; w++) {
+          dst32[w] = __builtin_bswap32(src32[w]);
+        }
+        // Copy any remainder bytes
+        uint32_t remainder = vertex_data_size % 4;
+        if (remainder) {
+          memcpy(dst + words * 4, src + words * 4, remainder);
+        }
+      }
+
+      // If indexed, copy index data
+      bool is_indexed = dc.index_base_addr != 0 && dc.index_size > 0;
+      uint32_t index_data_size = 0;
+      if (is_indexed) {
+        uint32_t idx_elem_size = (dc.index_type == 2) ? 4 : 2;
+        index_data_size = dc.num_indices * idx_elem_size;
+        if (ib_offset + index_data_size <= kStagingBufferSize &&
+            dc.index_base_addr < 0x100000000ULL && guest_base) {
+          const uint8_t* isrc = guest_base + dc.index_base_addr;
+          uint8_t* idst = ib_map + ib_offset;
+          if (idx_elem_size == 4) {
+            uint32_t cnt = dc.num_indices;
+            const uint32_t* s32 = reinterpret_cast<const uint32_t*>(isrc);
+            uint32_t* d32 = reinterpret_cast<uint32_t*>(idst);
+            for (uint32_t i = 0; i < cnt; i++) d32[i] = __builtin_bswap32(s32[i]);
+          } else {
+            uint32_t cnt = dc.num_indices;
+            const uint16_t* s16 = reinterpret_cast<const uint16_t*>(isrc);
+            uint16_t* d16 = reinterpret_cast<uint16_t*>(idst);
+            for (uint32_t i = 0; i < cnt; i++) d16[i] = __builtin_bswap16(s16[i]);
+          }
+        } else {
+          is_indexed = false;
+        }
+      }
+
+      // Bind vertex buffer at current offset
+      VkDeviceSize vb_vk_offset = vb_offset;
+      vkCmdBindVertexBuffers(vk_cmd_buffer_, 0, 1, &vk_staging_vb_, &vb_vk_offset);
+
+      if (is_indexed) {
+        VkIndexType vk_idx_type = (dc.index_type == 2)
+            ? VK_INDEX_TYPE_UINT32 : VK_INDEX_TYPE_UINT16;
+        vkCmdBindIndexBuffer(vk_cmd_buffer_, vk_staging_ib_, ib_offset, vk_idx_type);
+        vkCmdDrawIndexed(vk_cmd_buffer_, dc.num_indices, 1, 0, 0, 0);
+        ib_offset += index_data_size;
+      } else {
+        vkCmdDraw(vk_cmd_buffer_, vertex_count, 1, 0, 0);
+      }
+
+      vb_offset += vertex_data_size;
+      draws_submitted++;
+    }
+
+    vkUnmapMemory(device, vk_staging_vb_mem_);
+    vkUnmapMemory(device, vk_staging_ib_mem_);
+
+    if (draws_submitted > 0) {
+      XELOGD("Frame {}: submitted {} draw calls ({} vertices)",
+             frame_count_, draws_submitted, vb_offset / 16);
+    }
+
+    // Clear draw calls for next frame
+    gpu_command_processor_->ClearDrawCalls();
   }
 
   // End render pass
@@ -740,7 +1062,6 @@ void Emulator::RenderFrame(uint32_t image_index) {
   submit.commandBufferCount = 1;
   submit.pCommandBuffers = &vk_cmd_buffer_;
 
-  // Wait on image available, signal render finished
   VkSemaphore wait_sems[] = {vulkan_swap_chain_->GetImageAvailableSemaphore()};
   VkPipelineStageFlags wait_stages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
   VkSemaphore signal_sems[] = {vulkan_swap_chain_->GetRenderFinishedSemaphore()};

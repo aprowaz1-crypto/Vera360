@@ -479,9 +479,51 @@ bool LzxDecompressXex(const uint8_t* data,
 
   // Now decompress the collected data
   std::vector<uint32_t> dummy_blocks;
-  return LzxDecompress(compressed.data(), compressed.size(),
+  bool ok = LzxDecompress(compressed.data(), compressed.size(),
                        uncompressed_size, window_bits,
                        dummy_blocks, output);
+  if (!ok) return false;
+
+  // ── E8 call translation (post-decompression fixup) ──────────────────
+  // Xbox 360 XEX2 applies an E8/E9 (x86 CALL/JMP) relative address
+  // translation after LZX decompression. This converts relative offsets
+  // back to absolute, which is how the LZX compressor improved compression
+  // by making CALL targets more repetitive.
+  //
+  // The algorithm scans for E8 bytes and translates the following 4-byte
+  // little-endian offset from absolute back to relative.
+  if (output.size() >= 5) {
+    size_t limit = output.size() - 4;
+    for (size_t i = 0; i < limit;) {
+      if (output[i] == 0xE8) {
+        // Read 4-byte LE offset after E8
+        int32_t abs_off = static_cast<int32_t>(
+            output[i+1] | (output[i+2] << 8) |
+            (output[i+3] << 16) | (output[i+4] << 24));
+
+        // Convert: if absolute value is in [0, uncompressed_size) or
+        // [-i, 0), it was translated by the compressor
+        int32_t file_size = static_cast<int32_t>(uncompressed_size);
+        if (abs_off >= -static_cast<int32_t>(i) && abs_off < file_size) {
+          int32_t rel_off;
+          if (abs_off >= 0) {
+            rel_off = abs_off - static_cast<int32_t>(i);
+          } else {
+            rel_off = abs_off + file_size;
+          }
+          output[i+1] = static_cast<uint8_t>(rel_off);
+          output[i+2] = static_cast<uint8_t>(rel_off >> 8);
+          output[i+3] = static_cast<uint8_t>(rel_off >> 16);
+          output[i+4] = static_cast<uint8_t>(rel_off >> 24);
+        }
+        i += 5;
+      } else {
+        i++;
+      }
+    }
+  }
+
+  return true;
 }
 
 }  // namespace xe::kernel
