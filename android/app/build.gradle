@@ -1,0 +1,60 @@
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.vera360.ax360e'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.vera360.ax360e"
+        minSdk 29          // Android 10 — Vulkan 1.1 baseline
+        targetSdk 34
+        versionCode 1
+        versionName "0.1.0-edge"
+
+        ndk {
+            abiFilters 'arm64-v8a'
+        }
+    }
+
+    // Native build handled by CMake step in CI — .so is pre-placed in jniLibs/
+    // To build natively via Gradle, uncomment externalNativeBuild blocks below.
+    //
+    // externalNativeBuild {
+    //     cmake {
+    //         path "../../CMakeLists.txt"
+    //         version "3.22.1+"
+    //     }
+    // }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),
+                          'proguard-rules.pro'
+        }
+        debug {
+            debuggable true
+            jniDebuggable true
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    sourceSets {
+        main {
+            jniLibs.srcDirs = ['src/main/jniLibs']
+        }
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'com.google.android.material:material:1.12.0'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+    implementation 'androidx.documentfile:documentfile:1.0.1'
+}

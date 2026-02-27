@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.vera360.ax360e">
+
+    <!-- Vulkan hardware -->
+    <uses-feature android:name="android.hardware.vulkan.level" android:version="1" android:required="true"/>
+    <uses-feature android:name="android.hardware.vulkan.version" android:version="0x00401000" android:required="true"/>
+
+    <!-- Storage for game ISOs -->
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE"/>
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>
+
+    <!-- Vibration for controller feedback -->
+    <uses-permission android:name="android.permission.VIBRATE"/>
+
+    <application
+        android:allowBackup="false"
+        android:icon="@drawable/ic_launcher"
+        android:label="@string/app_name"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Vera360"
+        android:extractNativeLibs="true"
+        android:largeHeap="true"
+        android:hardwareAccelerated="true">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:screenOrientation="landscape">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".EmulationActivity"
+            android:exported="false"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
+            android:screenOrientation="landscape"
+            android:theme="@style/Theme.Vera360.Fullscreen"/>
+
+    </application>
+</manifest>

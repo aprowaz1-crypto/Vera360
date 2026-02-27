@@ -1,0 +1,27 @@
+# Build outputs
+build-arm64/
+build/
+*.o
+*.a
+
+# Android build
+android/app/build/
+android/.gradle/
+android/build/
+android/local.properties
+
+# Pre-built native libs (built by CI)
+android/app/src/main/jniLibs/arm64-v8a/libvera360.so
+android/app/src/main/jniLibs/arm64-v8a/libc++_shared.so
+
+# IDE
+.idea/
+*.iml
+.vscode/
+.DS_Store
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile

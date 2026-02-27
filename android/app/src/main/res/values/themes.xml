@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <style name="Theme.Vera360" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">#16C47F</item>
+        <item name="colorPrimaryVariant">#0FA968</item>
+        <item name="colorOnPrimary">#000000</item>
+        <item name="colorSecondary">#333366</item>
+        <item name="android:statusBarColor">#1A1A2E</item>
+        <item name="android:navigationBarColor">#1A1A2E</item>
+        <item name="android:windowBackground">#1A1A2E</item>
+    </style>
+
+    <style name="Theme.Vera360.Fullscreen" parent="Theme.Vera360">
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowContentOverlay">@null</item>
+        <item name="windowNoTitle">true</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+
+</resources>
