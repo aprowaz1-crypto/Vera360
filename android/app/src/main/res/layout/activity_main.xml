@@ -3,66 +3,139 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:gravity="center"
-    android:padding="32dp"
-    android:background="#FF1A1A2E">
+    android:background="#FF0D0D1A">
 
-    <!-- Logo area -->
-    <TextView
-        android:layout_width="wrap_content"
+    <!-- ── Top bar ────────────────────────────────────────────────── -->
+    <LinearLayout
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="ax360e"
-        android:textSize="48sp"
-        android:textColor="#FF16C47F"
-        android:fontFamily="monospace"
-        android:textStyle="bold"
-        android:layout_marginBottom="8dp"/>
+        android:orientation="horizontal"
+        android:gravity="center_vertical"
+        android:padding="20dp"
+        android:background="#FF13132B">
 
-    <TextView
-        android:layout_width="wrap_content"
+        <!-- Logo text -->
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:orientation="vertical">
+
+            <TextView
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="VERA360"
+                android:textSize="26sp"
+                android:textColor="#FF16C47F"
+                android:letterSpacing="0.15"
+                android:textStyle="bold"/>
+
+            <TextView
+                android:id="@+id/tv_gpu_info"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Detecting GPU…"
+                android:textSize="12sp"
+                android:textColor="#88FFFFFF"
+                android:layout_marginTop="2dp"/>
+        </LinearLayout>
+
+        <!-- Status badge -->
+        <TextView
+            android:id="@+id/tv_status"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Initializing"
+            android:textSize="12sp"
+            android:textColor="#FF16C47F"
+            android:background="#2216C47F"
+            android:paddingStart="12dp"
+            android:paddingEnd="12dp"
+            android:paddingTop="6dp"
+            android:paddingBottom="6dp"/>
+    </LinearLayout>
+
+    <!-- ── Divider ──────────────────────────────────────────────── -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#22FFFFFF"/>
+
+    <!-- ── Action buttons ───────────────────────────────────────── -->
+    <LinearLayout
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Xenia Edge for Android"
-        android:textSize="16sp"
-        android:textColor="#AAFFFFFF"
-        android:layout_marginBottom="32dp"/>
+        android:orientation="horizontal"
+        android:padding="16dp"
+        android:gravity="center">
 
-    <!-- Status -->
+        <Button
+            android:id="@+id/btn_open_file"
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_weight="1"
+            android:text="⊕  Open Game"
+            android:textAllCaps="false"
+            android:textSize="15sp"
+            android:backgroundTint="#FF16C47F"
+            android:textColor="#FF000000"
+            android:layout_marginEnd="8dp"/>
+
+        <Button
+            android:id="@+id/btn_settings"
+            android:layout_width="0dp"
+            android:layout_height="52dp"
+            android:layout_weight="1"
+            android:text="⚙  Settings"
+            android:textAllCaps="false"
+            android:textSize="15sp"
+            android:backgroundTint="#FF1E1E3A"
+            android:textColor="#CCFFFFFF"
+            android:layout_marginStart="8dp"/>
+    </LinearLayout>
+
+    <!-- ── Divider ──────────────────────────────────────────────── -->
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#11FFFFFF"/>
+
+    <!-- ── Recent games header ──────────────────────────────────── -->
     <TextView
-        android:id="@+id/tv_status"
-        android:layout_width="wrap_content"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Initializing…"
-        android:textSize="14sp"
-        android:textColor="#CCFFFFFF"
-        android:layout_marginBottom="32dp"/>
-
-    <!-- Buttons -->
-    <Button
-        android:id="@+id/btn_open_file"
-        android:layout_width="280dp"
-        android:layout_height="56dp"
-        android:text="Open Game (XEX / ISO)"
-        android:textAllCaps="false"
-        android:backgroundTint="#FF16C47F"
-        android:textColor="#FF000000"
-        android:layout_marginBottom="16dp"/>
-
-    <Button
-        android:id="@+id/btn_settings"
-        android:layout_width="280dp"
-        android:layout_height="56dp"
-        android:text="Settings"
-        android:textAllCaps="false"
-        android:backgroundTint="#FF333366"
-        android:textColor="#FFFFFFFF"/>
-
-    <!-- Version info -->
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="Vera360 v0.1.0-edge | ARM64 Vulkan"
+        android:text="RECENT GAMES"
         android:textSize="11sp"
         android:textColor="#55FFFFFF"
-        android:layout_marginTop="48dp"/>
+        android:letterSpacing="0.2"
+        android:paddingStart="20dp"
+        android:paddingTop="16dp"
+        android:paddingBottom="8dp"/>
+
+    <!-- ── Recent games list (dynamic) ──────────────────────────── -->
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:paddingStart="20dp"
+        android:paddingEnd="20dp">
+
+        <LinearLayout
+            android:id="@+id/recent_games_container"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"/>
+    </ScrollView>
+
+    <!-- ── Bottom info ──────────────────────────────────────────── -->
+    <TextView
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Vera360 v0.2.0-edge  •  ARM64 Vulkan 1.1"
+        android:textSize="10sp"
+        android:textColor="#33FFFFFF"
+        android:gravity="center"
+        android:padding="12dp"
+        android:background="#FF0A0A16"/>
 
 </LinearLayout>

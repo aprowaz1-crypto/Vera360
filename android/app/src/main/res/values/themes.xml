@@ -6,9 +6,9 @@
         <item name="colorPrimaryVariant">#0FA968</item>
         <item name="colorOnPrimary">#000000</item>
         <item name="colorSecondary">#333366</item>
-        <item name="android:statusBarColor">#1A1A2E</item>
-        <item name="android:navigationBarColor">#1A1A2E</item>
-        <item name="android:windowBackground">#1A1A2E</item>
+        <item name="android:statusBarColor">#0D0D1A</item>
+        <item name="android:navigationBarColor">#0A0A16</item>
+        <item name="android:windowBackground">#0D0D1A</item>
     </style>
 
     <style name="Theme.Vera360.Fullscreen" parent="Theme.Vera360">
@@ -16,6 +16,12 @@
         <item name="android:windowContentOverlay">@null</item>
         <item name="windowNoTitle">true</item>
         <item name="android:windowLayoutInDisplayCutoutMode">shortEdges</item>
+    </style>
+
+    <style name="Theme.Vera360.Dialog" parent="Theme.MaterialComponents.Dialog">
+        <item name="colorPrimary">#16C47F</item>
+        <item name="android:background">#1E1E3A</item>
+        <item name="android:textColor">#FFFFFF</item>
     </style>
 
 </resources>

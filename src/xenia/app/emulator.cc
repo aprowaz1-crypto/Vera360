@@ -933,15 +933,14 @@ void Emulator::RenderFrame(uint32_t image_index) {
   vkResetCommandBuffer(vk_cmd_buffer_, 0);
   vkBeginCommandBuffer(vk_cmd_buffer_, &begin_ci);
 
-  // Clear color: black when GPU active, pulsing green when idle
+  // Clear color: very dark blue-gray (professional idle), black when rendering
   VkClearValue clear_color{};
   bool has_draws = gpu_command_processor_ &&
                    !gpu_command_processor_->GetDrawCalls().empty();
   if (has_draws) {
     clear_color.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
   } else {
-    float pulse = static_cast<float>(frame_count_ % 120) / 120.0f;
-    clear_color.color = {{0.0f, 0.05f + pulse * 0.1f, 0.0f, 1.0f}};
+    clear_color.color = {{0.02f, 0.02f, 0.05f, 1.0f}};
   }
 
   VkRenderPassBeginInfo rp_begin{};
@@ -1066,9 +1065,7 @@ void Emulator::RenderFrame(uint32_t image_index) {
       XELOGD("Frame {}: submitted {} draw calls ({} vertices)",
              frame_count_, draws_submitted, vb_offset / 16);
     }
-
-    // Clear draw calls for next frame
-    gpu_command_processor_->ClearDrawCalls();
+    // Draw calls cleared in Tick() after Present()
   }
 
   // End render pass
