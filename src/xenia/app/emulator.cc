@@ -60,25 +60,44 @@ bool Emulator::Initialize(ANativeWindow* window, const std::string& storage_root
   if (!InitHid()) return false;
 
   // Wire GPU MMIO intercept: PPC writes to GPU register range get forwarded
-  if (processor_ && gpu_command_processor_) {
-    auto* interp = processor_->GetInterpreter();
-    if (interp) {
-      auto* gpu = gpu_command_processor_.get();
-      interp->SetMmioHandlers(
-        [gpu](uint32_t addr, uint32_t value) -> bool {
-          return gpu->HandleMmioWrite(addr, value);
-        },
-        [gpu](uint32_t addr) -> uint32_t {
-          return gpu->HandleMmioRead(addr);
-        }
-      );
-      XELOGI("GPU MMIO intercept wired to PPC interpreter");
-    }
-  }
+  WireGpuMmio();
 
   running_ = true;
   XELOGI("Emulator initialised OK");
   return true;
+}
+
+bool Emulator::InitCore(const std::string& storage_root) {
+  storage_root_ = storage_root;
+  XELOGI("=== Vera360 / Xenia Edge ===");
+  XELOGI("InitCore: storage={}", storage_root);
+
+  if (!InitMemory()) return false;
+  if (!InitCpu()) return false;
+  if (!InitKernel()) return false;
+  if (!InitApu()) return false;
+  if (!InitHid()) return false;
+
+  XELOGI("InitCore done — waiting for surface");
+  return true;
+}
+
+bool Emulator::InitGraphicsFromSurface(ANativeWindow* window) {
+  XELOGI("InitGraphicsFromSurface");
+  native_window_ = window;
+
+  if (!InitGraphics(window)) return false;
+
+  // Wire GPU MMIO now that GPU is ready
+  WireGpuMmio();
+
+  XELOGI("Graphics initialised from surface");
+  return true;
+}
+
+void Emulator::StartRunning() {
+  running_ = true;
+  XELOGI("Emulator now running");
 }
 
 void Emulator::Shutdown() {
@@ -1103,6 +1122,24 @@ void Emulator::OnSurfaceDestroyed() {
   XELOGI("Surface destroyed");
   native_window_ = nullptr;
   vulkan_swap_chain_.reset();
+}
+
+void Emulator::WireGpuMmio() {
+  if (processor_ && gpu_command_processor_) {
+    auto* interp = processor_->GetInterpreter();
+    if (interp) {
+      auto* gpu = gpu_command_processor_.get();
+      interp->SetMmioHandlers(
+        [gpu](uint32_t addr, uint32_t value) -> bool {
+          return gpu->HandleMmioWrite(addr, value);
+        },
+        [gpu](uint32_t addr) -> uint32_t {
+          return gpu->HandleMmioRead(addr);
+        }
+      );
+      XELOGI("GPU MMIO intercept wired to PPC interpreter");
+    }
+  }
 }
 
 }  // namespace xe

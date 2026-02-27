@@ -26,7 +26,8 @@ public class NativeBridge {
     public static native void startEmulation();
     public static native void pause();
     public static native void resume();
-
+    // ── Frame tick (called from render thread) ──────────────────────────
+    public static native void tick();
     // ── Hardware queries ────────────────────────────────────────────────────
     public static native boolean isVulkanAvailable();
     public static native String getGpuName();

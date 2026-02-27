@@ -22,6 +22,8 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
     private SurfaceView surfaceView;
     private TouchOverlayView touchOverlay;
     private boolean nativeRunning = false;
+    private Thread renderThread;
+    private volatile boolean renderLoopRunning = false;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -68,13 +70,40 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
         if (!nativeRunning) {
             nativeRunning = true;
             NativeBridge.startEmulation();
+            startRenderThread();
         }
     }
 
     @Override
     public void surfaceDestroyed(SurfaceHolder holder) {
+        stopRenderThread();
         NativeBridge.surfaceDestroyed();
         nativeRunning = false;
+    }
+
+    private void startRenderThread() {
+        renderLoopRunning = true;
+        renderThread = new Thread(() -> {
+            while (renderLoopRunning) {
+                NativeBridge.tick();
+                try {
+                    Thread.sleep(16); // ~60 FPS
+                } catch (InterruptedException e) {
+                    break;
+                }
+            }
+        }, "Vera360-Render");
+        renderThread.start();
+    }
+
+    private void stopRenderThread() {
+        renderLoopRunning = false;
+        if (renderThread != null) {
+            try {
+                renderThread.join(1000);
+            } catch (InterruptedException ignored) {}
+            renderThread = null;
+        }
     }
 
     @Override
@@ -96,6 +125,7 @@ public class EmulationActivity extends AppCompatActivity implements SurfaceHolde
 
     @Override
     protected void onDestroy() {
+        stopRenderThread();
         NativeBridge.shutdown();
         super.onDestroy();
     }

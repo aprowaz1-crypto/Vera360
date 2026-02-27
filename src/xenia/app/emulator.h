@@ -44,6 +44,15 @@ class Emulator {
   /// Full system initialisation (call once, from the JNI bridge)
   bool Initialize(ANativeWindow* window, const std::string& storage_root);
 
+  /// Phased init: core subsystems without graphics (no surface needed)
+  bool InitCore(const std::string& storage_root);
+
+  /// Phased init: graphics from a Surface (call after surfaceCreated)
+  bool InitGraphicsFromSurface(ANativeWindow* window);
+
+  /// Start the emulator running (call after LoadGame)
+  void StartRunning();
+
   /// Tear everything down
   void Shutdown();
 
@@ -77,6 +86,9 @@ class Emulator {
   bool InitApu();
   bool InitHid();
   bool InitGpuRenderer();
+
+  /// Wire GPU MMIO intercept to PPC interpreter
+  void WireGpuMmio();
 
   /// Kernel HLE dispatch — called when guest executes sc
   void DispatchKernelCall(uint32_t ordinal, void* thread_state);

@@ -45,6 +45,8 @@ void Shutdown();
 
 /// Set button state from JNI/touch overlay
 void SetButton(int pad, uint16_t button, bool pressed);
+/// Set full button mask at once (replaces all buttons)
+void SetButtonsRaw(int pad, uint16_t buttons);
 /// Set analog stick from JNI/touch overlay
 void SetAnalog(int pad, bool left, float x, float y);
 /// Set trigger value from JNI

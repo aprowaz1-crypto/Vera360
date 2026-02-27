@@ -25,6 +25,13 @@ void SetButton(int pad, uint16_t button, bool pressed) {
   }
 }
 
+/// Set full button mask at once (replaces all buttons)
+void SetButtonsRaw(int pad, uint16_t buttons) {
+  std::lock_guard<std::mutex> lock(g_gamepad_mutex);
+  if (pad < 0 || pad >= 4) return;
+  g_gamepads[pad].buttons = buttons;
+}
+
 /// Called from JNI/touch overlay to set analog stick
 void SetAnalog(int pad, bool left, float x, float y) {
   std::lock_guard<std::mutex> lock(g_gamepad_mutex);
