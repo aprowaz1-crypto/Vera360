@@ -13,6 +13,7 @@ add_library(xe_kernel STATIC
     xmodule.cc
     xthread.cc
     xobject.cc
+    xex2_loader.cc
 )
 
 target_include_directories(xe_kernel PUBLIC ${CMAKE_SOURCE_DIR}/src)

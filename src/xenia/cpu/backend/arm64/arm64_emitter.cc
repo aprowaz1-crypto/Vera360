@@ -501,4 +501,398 @@ void ARM64Emitter::PatchCondBranch(size_t branch_offset, size_t target_offset) {
   *instr = (*instr & 0xFF00001F) | ((imm19 & 0x7FFFF) << 5);
 }
 
+// ── Extended integer ────────────────────────────────────────────────────────
+
+void ARM64Emitter::MADD(Reg rd, Reg rn, Reg rm, Reg ra) {
+  Emit32(0x9B000000 | Rm(rm) | (static_cast<uint32_t>(ra) << 10) | Rn(rn) | Rd(rd));
+}
+void ARM64Emitter::MSUB(Reg rd, Reg rn, Reg rm, Reg ra) {
+  Emit32(0x9B008000 | Rm(rm) | (static_cast<uint32_t>(ra) << 10) | Rn(rn) | Rd(rd));
+}
+void ARM64Emitter::SMADDL(Reg rd, Reg rn, Reg rm, Reg ra) {
+  Emit32(0x9B200000 | Rm(rm) | (static_cast<uint32_t>(ra) << 10) | Rn(rn) | Rd(rd));
+}
+void ARM64Emitter::UMADDL(Reg rd, Reg rn, Reg rm, Reg ra) {
+  Emit32(0x9BA00000 | Rm(rm) | (static_cast<uint32_t>(ra) << 10) | Rn(rn) | Rd(rd));
+}
+void ARM64Emitter::SMULH(Reg rd, Reg rn, Reg rm) {
+  Emit32(0x9B407C00 | Rm(rm) | Rn(rn) | Rd(rd));
+}
+void ARM64Emitter::UMULH(Reg rd, Reg rn, Reg rm) {
+  Emit32(0x9BC07C00 | Rm(rm) | Rn(rn) | Rd(rd));
+}
+void ARM64Emitter::ADC(Reg rd, Reg rn, Reg rm) {
+  Emit32(0x9A000000 | Rm(rm) | Rn(rn) | Rd(rd));
+}
+void ARM64Emitter::ADCS(Reg rd, Reg rn, Reg rm) {
+  Emit32(0xBA000000 | Rm(rm) | Rn(rn) | Rd(rd));
+}
+void ARM64Emitter::SBC(Reg rd, Reg rn, Reg rm) {
+  Emit32(0xDA000000 | Rm(rm) | Rn(rn) | Rd(rd));
+}
+void ARM64Emitter::SBCS(Reg rd, Reg rn, Reg rm) {
+  Emit32(0xFA000000 | Rm(rm) | Rn(rn) | Rd(rd));
+}
+void ARM64Emitter::SXTW(Reg rd, Reg rn) {
+  // SBFM Xd, Xn, #0, #31
+  Emit32(0x93407C00 | Rn(rn) | Rd(rd));
+}
+void ARM64Emitter::SXTH(Reg rd, Reg rn) {
+  // SBFM Xd, Xn, #0, #15
+  Emit32(0x93403C00 | Rn(rn) | Rd(rd));
+}
+void ARM64Emitter::SXTB(Reg rd, Reg rn) {
+  // SBFM Xd, Xn, #0, #7
+  Emit32(0x93401C00 | Rn(rn) | Rd(rd));
+}
+void ARM64Emitter::UXTW(Reg rd, Reg rn) {
+  // UBFM Wd, Wn, #0, #31  (MOV Wd, Wn essentially)
+  Emit32(0x2A0003E0 | Rm(rn) | Rd(rd));  // ORR Wd, WZR, Wn
+}
+void ARM64Emitter::UXTH(Reg rd, Reg rn) {
+  // UBFM Xd, Xn, #0, #15
+  Emit32(0xD3403C00 | Rn(rn) | Rd(rd));
+}
+void ARM64Emitter::UXTB(Reg rd, Reg rn) {
+  // UBFM Xd, Xn, #0, #7
+  Emit32(0xD3401C00 | Rn(rn) | Rd(rd));
+}
+void ARM64Emitter::BIC(Reg rd, Reg rn, Reg rm) {
+  Emit32(0x8A200000 | Rm(rm) | Rn(rn) | Rd(rd));
+}
+void ARM64Emitter::BICS(Reg rd, Reg rn, Reg rm) {
+  Emit32(0xEA200000 | Rm(rm) | Rn(rn) | Rd(rd));
+}
+void ARM64Emitter::MVN(Reg rd, Reg rm) {
+  ORN(rd, Reg::XZR, rm);
+}
+void ARM64Emitter::EON(Reg rd, Reg rn, Reg rm) {
+  Emit32(0xCA200000 | Rm(rm) | Rn(rn) | Rd(rd));
+}
+void ARM64Emitter::ANDS(Reg rd, Reg rn, Reg rm) {
+  Emit32(0xEA000000 | Rm(rm) | Rn(rn) | Rd(rd));
+}
+void ARM64Emitter::UBFM(Reg rd, Reg rn, uint8_t immr, uint8_t imms) {
+  Emit32(0xD3400000 | ((immr & 0x3F) << 16) | ((imms & 0x3F) << 10) | Rn(rn) | Rd(rd));
+}
+void ARM64Emitter::SBFM(Reg rd, Reg rn, uint8_t immr, uint8_t imms) {
+  Emit32(0x93400000 | ((immr & 0x3F) << 16) | ((imms & 0x3F) << 10) | Rn(rn) | Rd(rd));
+}
+void ARM64Emitter::EXTR(Reg rd, Reg rn, Reg rm, uint8_t lsb) {
+  Emit32(0x93C00000 | Rm(rm) | ((lsb & 0x3F) << 10) | Rn(rn) | Rd(rd));
+}
+void ARM64Emitter::CCMP(Reg rn, Reg rm, uint8_t nzcv, Cond cc) {
+  Emit32(0xFA400000 | (static_cast<uint32_t>(cc) << 12) | Rm(rm) | Rn(rn) | (nzcv & 0xF));
+}
+void ARM64Emitter::CSINV(Reg rd, Reg rn, Reg rm, Cond cc) {
+  Emit32(0xDA800000 | (static_cast<uint32_t>(cc) << 12) | Rm(rm) | Rn(rn) | Rd(rd));
+}
+void ARM64Emitter::CSNEG(Reg rd, Reg rn, Reg rm, Cond cc) {
+  Emit32(0xDA800400 | (static_cast<uint32_t>(cc) << 12) | Rm(rm) | Rn(rn) | Rd(rd));
+}
+
+// ── Load/store register offset ──────────────────────────────────────────────
+
+void ARM64Emitter::LDR_reg(Reg rt, Reg rn, Reg rm) {
+  Emit32(0xF8606800 | Rm(rm) | Rn(rn) | Rd(rt));
+}
+void ARM64Emitter::LDRW_reg(Reg rt, Reg rn, Reg rm) {
+  Emit32(0xB8606800 | Rm(rm) | Rn(rn) | Rd(rt));
+}
+void ARM64Emitter::LDRH_reg(Reg rt, Reg rn, Reg rm) {
+  Emit32(0x78606800 | Rm(rm) | Rn(rn) | Rd(rt));
+}
+void ARM64Emitter::LDRB_reg(Reg rt, Reg rn, Reg rm) {
+  Emit32(0x38606800 | Rm(rm) | Rn(rn) | Rd(rt));
+}
+void ARM64Emitter::STR_reg(Reg rt, Reg rn, Reg rm) {
+  Emit32(0xF8206800 | Rm(rm) | Rn(rn) | Rd(rt));
+}
+void ARM64Emitter::STRW_reg(Reg rt, Reg rn, Reg rm) {
+  Emit32(0xB8206800 | Rm(rm) | Rn(rn) | Rd(rt));
+}
+void ARM64Emitter::STRH_reg(Reg rt, Reg rn, Reg rm) {
+  Emit32(0x78206800 | Rm(rm) | Rn(rn) | Rd(rt));
+}
+void ARM64Emitter::STRB_reg(Reg rt, Reg rn, Reg rm) {
+  Emit32(0x38206800 | Rm(rm) | Rn(rn) | Rd(rt));
+}
+void ARM64Emitter::LDRSW(Reg rt, Reg rn, int32_t offset) {
+  uint32_t imm12 = (offset >> 2) & 0xFFF;
+  Emit32(0xB9800000 | (imm12 << 10) | Rn(rn) | Rd(rt));
+}
+void ARM64Emitter::LDRSH(Reg rt, Reg rn, int32_t offset) {
+  uint32_t imm12 = (offset >> 1) & 0xFFF;
+  Emit32(0x79800000 | (imm12 << 10) | Rn(rn) | Rd(rt));
+}
+void ARM64Emitter::LDRSB(Reg rt, Reg rn, int32_t offset) {
+  uint32_t imm12 = offset & 0xFFF;
+  Emit32(0x39800000 | (imm12 << 10) | Rn(rn) | Rd(rt));
+}
+void ARM64Emitter::LDAXR(Reg rt, Reg rn) {
+  Emit32(0xC85FFC00 | Rn(rn) | Rd(rt));
+}
+void ARM64Emitter::STLXR(Reg rs, Reg rt, Reg rn) {
+  Emit32(0xC800FC00 | Rm(rs) | Rn(rn) | Rd(rt));
+}
+void ARM64Emitter::LDAXRW(Reg rt, Reg rn) {
+  Emit32(0x885FFC00 | Rn(rn) | Rd(rt));
+}
+void ARM64Emitter::STLXRW(Reg rs, Reg rt, Reg rn) {
+  Emit32(0x8800FC00 | Rm(rs) | Rn(rn) | Rd(rt));
+}
+void ARM64Emitter::CLREX() {
+  Emit32(0xD503305F);
+}
+
+// ── Scalar FP ───────────────────────────────────────────────────────────────
+
+void ARM64Emitter::FADD_d(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x1E602800 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FSUB_d(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x1E603800 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FMUL_d(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x1E600800 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FDIV_d(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x1E601800 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FMADD_d(VReg vd, VReg vn, VReg vm, VReg va) {
+  Emit32(0x1F400000 | Vm(vm) | (static_cast<uint32_t>(va) << 10) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FMSUB_d(VReg vd, VReg vn, VReg vm, VReg va) {
+  Emit32(0x1F408000 | Vm(vm) | (static_cast<uint32_t>(va) << 10) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FNMADD_d(VReg vd, VReg vn, VReg vm, VReg va) {
+  Emit32(0x1F600000 | Vm(vm) | (static_cast<uint32_t>(va) << 10) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FNMSUB_d(VReg vd, VReg vn, VReg vm, VReg va) {
+  Emit32(0x1F608000 | Vm(vm) | (static_cast<uint32_t>(va) << 10) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FABS_d(VReg vd, VReg vn) {
+  Emit32(0x1E60C000 | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FNEG_d(VReg vd, VReg vn) {
+  Emit32(0x1E614000 | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FSQRT_d(VReg vd, VReg vn) {
+  Emit32(0x1E61C000 | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FMOV_d(VReg vd, VReg vn) {
+  Emit32(0x1E604000 | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FCMP_d(VReg vn, VReg vm) {
+  Emit32(0x1E602000 | Vm(vm) | Vn(vn));
+}
+void ARM64Emitter::FCMP_dz(VReg vn) {
+  Emit32(0x1E602008 | Vn(vn));
+}
+void ARM64Emitter::FADD_s(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x1E202800 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FSUB_s(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x1E203800 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FMUL_s(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x1E200800 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FDIV_s(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x1E201800 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FMADD_s(VReg vd, VReg vn, VReg vm, VReg va) {
+  Emit32(0x1F000000 | Vm(vm) | (static_cast<uint32_t>(va) << 10) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FMSUB_s(VReg vd, VReg vn, VReg vm, VReg va) {
+  Emit32(0x1F008000 | Vm(vm) | (static_cast<uint32_t>(va) << 10) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FABS_s(VReg vd, VReg vn) {
+  Emit32(0x1E20C000 | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FNEG_s(VReg vd, VReg vn) {
+  Emit32(0x1E214000 | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FSQRT_s(VReg vd, VReg vn) {
+  Emit32(0x1E21C000 | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FMOV_s(VReg vd, VReg vn) {
+  Emit32(0x1E204000 | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FCVT_sd(VReg vd, VReg vn) {
+  // FCVT Dd, Sn
+  Emit32(0x1E22C000 | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FCVT_ds(VReg vd, VReg vn) {
+  // FCVT Sd, Dn
+  Emit32(0x1E624000 | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FCVTZS_xd(Reg rd, VReg vn) {
+  Emit32(0x9E780000 | Vn(vn) | Rd(rd));
+}
+void ARM64Emitter::FCVTZS_wd(Reg rd, VReg vn) {
+  Emit32(0x1E780000 | Vn(vn) | Rd(rd));
+}
+void ARM64Emitter::SCVTF_dx(VReg vd, Reg rn) {
+  Emit32(0x9E620000 | Rn(rn) | Vd(vd));
+}
+void ARM64Emitter::SCVTF_dw(VReg vd, Reg rn) {
+  Emit32(0x1E620000 | Rn(rn) | Vd(vd));
+}
+void ARM64Emitter::UCVTF_dx(VReg vd, Reg rn) {
+  Emit32(0x9E630000 | Rn(rn) | Vd(vd));
+}
+void ARM64Emitter::FMOV_dtog(Reg rd, VReg vn) {
+  Emit32(0x9E660000 | Vn(vn) | Rd(rd));
+}
+void ARM64Emitter::FMOV_gtod(VReg vd, Reg rn) {
+  Emit32(0x9E670000 | Rn(rn) | Vd(vd));
+}
+void ARM64Emitter::FMOV_stog(Reg rd, VReg vn) {
+  Emit32(0x1E260000 | Vn(vn) | Rd(rd));
+}
+void ARM64Emitter::FMOV_gtos(VReg vd, Reg rn) {
+  Emit32(0x1E270000 | Rn(rn) | Vd(vd));
+}
+void ARM64Emitter::FRECPE_d(VReg vd, VReg vn) {
+  Emit32(0x5EE1D800 | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FRSQRTE_d(VReg vd, VReg vn) {
+  Emit32(0x7EE1D800 | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FCSEL_d(VReg vd, VReg vn, VReg vm, Cond cc) {
+  Emit32(0x1E600C00 | (static_cast<uint32_t>(cc) << 12) | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::LDR_d(VReg vt, Reg rn, int32_t offset) {
+  uint32_t imm12 = (offset >> 3) & 0xFFF;
+  Emit32(0xFD400000 | (imm12 << 10) | Rn(rn) | Vd(vt));
+}
+void ARM64Emitter::STR_d(VReg vt, Reg rn, int32_t offset) {
+  uint32_t imm12 = (offset >> 3) & 0xFFF;
+  Emit32(0xFD000000 | (imm12 << 10) | Rn(rn) | Vd(vt));
+}
+void ARM64Emitter::LDR_s(VReg vt, Reg rn, int32_t offset) {
+  uint32_t imm12 = (offset >> 2) & 0xFFF;
+  Emit32(0xBD400000 | (imm12 << 10) | Rn(rn) | Vd(vt));
+}
+void ARM64Emitter::STR_s(VReg vt, Reg rn, int32_t offset) {
+  uint32_t imm12 = (offset >> 2) & 0xFFF;
+  Emit32(0xBD000000 | (imm12 << 10) | Rn(rn) | Vd(vt));
+}
+
+// ── Additional NEON ─────────────────────────────────────────────────────────
+
+void ARM64Emitter::MOV_v(VReg vd, VReg vn) {
+  ORR_v(vd, vn, vn);
+}
+void ARM64Emitter::MOVI_v(VReg vd, uint8_t imm8) {
+  // MOVI Vd.4S, #imm8
+  uint32_t a = (imm8 >> 7) & 1;
+  uint32_t bcd = (imm8 >> 4) & 7;
+  uint32_t efgh = imm8 & 0xF;
+  Emit32(0x4F000400 | (a << 18) | (bcd << 16) | (efgh << 5) | Vd(vd));
+}
+void ARM64Emitter::NOT_v(VReg vd, VReg vn) {
+  Emit32(0x6E205800 | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::BSL_v(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x6E601C00 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::BIF_v(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x6EE01C00 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::BIT_v(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x6EA01C00 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FRINTM_4s(VReg vd, VReg vn) {
+  Emit32(0x4E219800 | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FRINTP_4s(VReg vd, VReg vn) {
+  Emit32(0x4EA18800 | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FRINTZ_4s(VReg vd, VReg vn) {
+  Emit32(0x4EA19800 | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FRINTN_4s(VReg vd, VReg vn) {
+  Emit32(0x4E218800 | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FRECPE_4s(VReg vd, VReg vn) {
+  Emit32(0x4EA1D800 | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FRSQRTE_4s(VReg vd, VReg vn) {
+  Emit32(0x6EA1D800 | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::ADDV_4s(VReg vd, VReg vn) {
+  Emit32(0x4EB1B800 | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FCMEQ_4s(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x4E20E400 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FCMGT_4s(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x6EA0E400 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::FCMGE_4s(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x6E20E400 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::ADD_4s(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x4EA08400 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::SUB_4s(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x6EA08400 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::MUL_4s(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x4EA09C00 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::SHL_4s(VReg vd, VReg vn, uint8_t shift) {
+  uint8_t immh_imml = 0x20 | (shift & 0x1F);
+  Emit32(0x4F005400 | (immh_imml << 16) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::SSHR_4s(VReg vd, VReg vn, uint8_t shift) {
+  uint8_t immh_imml = 0x40 - (shift & 0x1F);
+  Emit32(0x4F000400 | (immh_imml << 16) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::USHR_4s(VReg vd, VReg vn, uint8_t shift) {
+  uint8_t immh_imml = 0x40 - (shift & 0x1F);
+  Emit32(0x6F000400 | (immh_imml << 16) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::CMPEQ_4s(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x6EA08C00 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::CMGT_4s(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x4EA03400 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::TBL_v(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x4E000000 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::ZIP1_4s(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x4E803800 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::ZIP2_4s(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x4E807800 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::UZP1_4s(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x4E801800 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::UZP2_4s(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x4E805800 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::REV64_4s(VReg vd, VReg vn) {
+  Emit32(0x4EA00800 | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::EXT_v(VReg vd, VReg vn, VReg vm, uint8_t idx) {
+  Emit32(0x6E000000 | ((idx & 0xF) << 11) | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::SMIN_4s(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x4EA06C00 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::SMAX_4s(VReg vd, VReg vn, VReg vm) {
+  Emit32(0x4EA06400 | Vm(vm) | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::ABS_4s(VReg vd, VReg vn) {
+  Emit32(0x4EA0B800 | Vn(vn) | Vd(vd));
+}
+void ARM64Emitter::NEG_4s(VReg vd, VReg vn) {
+  Emit32(0x6EA0B800 | Vn(vn) | Vd(vd));
+}
+
 }  // namespace xe::cpu::backend::arm64

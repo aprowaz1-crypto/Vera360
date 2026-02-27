@@ -8,10 +8,15 @@
 #pragma once
 
 #include <cstdint>
+#include <fstream>
 #include <memory>
 #include <string>
 
 struct ANativeWindow;
+
+namespace xe::kernel {
+class KernelState;
+}
 
 namespace xe {
 
@@ -36,6 +41,8 @@ class Emulator {
   void Pause();
   void Resume();
   bool is_running() const { return running_; }
+  bool is_game_loaded() const { return game_loaded_; }
+  uint64_t frame_count() const { return frame_count_; }
 
   /// Surface change (e.g., orientation)
   void OnSurfaceChanged(ANativeWindow* window, int width, int height);
@@ -49,10 +56,20 @@ class Emulator {
   bool InitApu();
   bool InitHid();
 
+  /// Game loading helpers
+  bool LoadXex(const std::string& path, std::ifstream& file,
+               std::streampos file_size);
+  bool LoadStfsPackage(const std::string& path);
+  bool LoadDiscImage(const std::string& path);
+
   bool running_ = false;
+  bool game_loaded_ = false;
+  uint64_t frame_count_ = 0;
   std::string storage_root_;
   int surface_width_ = 0;
   int surface_height_ = 0;
+
+  kernel::KernelState* kernel_state_ = nullptr;
 };
 
 }  // namespace xe

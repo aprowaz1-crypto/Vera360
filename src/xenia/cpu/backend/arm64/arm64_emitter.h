@@ -200,6 +200,138 @@ class ARM64Emitter {
   void FCVTZS_4s(VReg vd, VReg vn);                   // Float to int
   void SCVTF_4s(VReg vd, VReg vn);                    // Int to float
 
+  // ── Extended integer ──────────────────────────────────────────────────
+
+  void MADD(Reg rd, Reg rn, Reg rm, Reg ra);          // rd = rn*rm + ra
+  void MSUB(Reg rd, Reg rn, Reg rm, Reg ra);          // rd = ra - rn*rm
+  void SMADDL(Reg rd, Reg rn, Reg rm, Reg ra);        // 32×32+64→64 signed
+  void UMADDL(Reg rd, Reg rn, Reg rm, Reg ra);        // unsigned
+  void SMULH(Reg rd, Reg rn, Reg rm);                 // signed high multiply
+  void UMULH(Reg rd, Reg rn, Reg rm);                 // unsigned high multiply
+  void ADC(Reg rd, Reg rn, Reg rm);                   // add with carry
+  void ADCS(Reg rd, Reg rn, Reg rm);                  // add with carry, set flags
+  void SBC(Reg rd, Reg rn, Reg rm);                   // subtract with carry
+  void SBCS(Reg rd, Reg rn, Reg rm);                  // subtract with carry, set flags
+  void SXTW(Reg rd, Reg rn);                          // sign-extend word
+  void SXTH(Reg rd, Reg rn);                          // sign-extend halfword
+  void SXTB(Reg rd, Reg rn);                          // sign-extend byte
+  void UXTW(Reg rd, Reg rn);                          // zero-extend word
+  void UXTH(Reg rd, Reg rn);
+  void UXTB(Reg rd, Reg rn);
+  void BIC(Reg rd, Reg rn, Reg rm);                   // bit clear
+  void BICS(Reg rd, Reg rn, Reg rm);                  // bit clear set flags
+  void MVN(Reg rd, Reg rm);                           // bitwise NOT
+  void EON(Reg rd, Reg rn, Reg rm);                   // exclusive OR NOT
+  void ANDS(Reg rd, Reg rn, Reg rm);                  // AND set flags
+  void UBFM(Reg rd, Reg rn, uint8_t immr, uint8_t imms); // unsigned bitfield move
+  void SBFM(Reg rd, Reg rn, uint8_t immr, uint8_t imms); // signed bitfield move
+  void EXTR(Reg rd, Reg rn, Reg rm, uint8_t lsb);    // extract
+  void CCMP(Reg rn, Reg rm, uint8_t nzcv, Cond cc);   // conditional compare
+  void CSINV(Reg rd, Reg rn, Reg rm, Cond cc);        // conditional select invert
+  void CSNEG(Reg rd, Reg rn, Reg rm, Cond cc);        // conditional select negate
+
+  // ── Load/store register offset ────────────────────────────────────────
+
+  void LDR_reg(Reg rt, Reg rn, Reg rm);               // LDR Xt, [Xn, Xm]
+  void LDRW_reg(Reg rt, Reg rn, Reg rm);
+  void LDRH_reg(Reg rt, Reg rn, Reg rm);
+  void LDRB_reg(Reg rt, Reg rn, Reg rm);
+  void STR_reg(Reg rt, Reg rn, Reg rm);
+  void STRW_reg(Reg rt, Reg rn, Reg rm);
+  void STRH_reg(Reg rt, Reg rn, Reg rm);
+  void STRB_reg(Reg rt, Reg rn, Reg rm);
+  void LDRSW(Reg rt, Reg rn, int32_t offset = 0);     // Load signed word
+  void LDRSH(Reg rt, Reg rn, int32_t offset = 0);     // Load signed halfword
+  void LDRSB(Reg rt, Reg rn, int32_t offset = 0);     // Load signed byte
+  void LDAXR(Reg rt, Reg rn);                         // Load-acquire exclusive
+  void STLXR(Reg rs, Reg rt, Reg rn);                 // Store-release exclusive
+  void LDAXRW(Reg rt, Reg rn);                        // 32-bit load-acquire exclusive
+  void STLXRW(Reg rs, Reg rt, Reg rn);                // 32-bit store-release exclusive
+  void CLREX();                                        // Clear exclusive
+
+  // ── Scalar FP ─────────────────────────────────────────────────────────
+
+  void FADD_d(VReg vd, VReg vn, VReg vm);             // Double-precision add
+  void FSUB_d(VReg vd, VReg vn, VReg vm);
+  void FMUL_d(VReg vd, VReg vn, VReg vm);
+  void FDIV_d(VReg vd, VReg vn, VReg vm);
+  void FMADD_d(VReg vd, VReg vn, VReg vm, VReg va);   // d = n*m + a
+  void FMSUB_d(VReg vd, VReg vn, VReg vm, VReg va);   // d = n*m - a
+  void FNMADD_d(VReg vd, VReg vn, VReg vm, VReg va);  // d = -(n*m + a)
+  void FNMSUB_d(VReg vd, VReg vn, VReg vm, VReg va);  // d = -(n*m - a)
+  void FABS_d(VReg vd, VReg vn);
+  void FNEG_d(VReg vd, VReg vn);
+  void FSQRT_d(VReg vd, VReg vn);
+  void FMOV_d(VReg vd, VReg vn);
+  void FCMP_d(VReg vn, VReg vm);                      // Compare, set NZCV
+  void FCMP_dz(VReg vn);                              // Compare with zero
+  void FADD_s(VReg vd, VReg vn, VReg vm);             // Single-precision
+  void FSUB_s(VReg vd, VReg vn, VReg vm);
+  void FMUL_s(VReg vd, VReg vn, VReg vm);
+  void FDIV_s(VReg vd, VReg vn, VReg vm);
+  void FMADD_s(VReg vd, VReg vn, VReg vm, VReg va);
+  void FMSUB_s(VReg vd, VReg vn, VReg vm, VReg va);
+  void FABS_s(VReg vd, VReg vn);
+  void FNEG_s(VReg vd, VReg vn);
+  void FSQRT_s(VReg vd, VReg vn);
+  void FMOV_s(VReg vd, VReg vn);
+  void FCVT_sd(VReg vd, VReg vn);                     // Single→Double
+  void FCVT_ds(VReg vd, VReg vn);                     // Double→Single
+  void FCVTZS_xd(Reg rd, VReg vn);                    // FP double→int64
+  void FCVTZS_wd(Reg rd, VReg vn);                    // FP double→int32
+  void SCVTF_dx(VReg vd, Reg rn);                     // int64→FP double
+  void SCVTF_dw(VReg vd, Reg rn);                     // int32→FP double
+  void UCVTF_dx(VReg vd, Reg rn);                     // uint64→FP double
+  void FMOV_dtog(Reg rd, VReg vn);                    // FMOV Xd, Dn
+  void FMOV_gtod(VReg vd, Reg rn);                    // FMOV Dn, Xn
+  void FMOV_stog(Reg rd, VReg vn);                    // FMOV Wd, Sn
+  void FMOV_gtos(VReg vd, Reg rn);                    // FMOV Sn, Wn
+  void FRECPE_d(VReg vd, VReg vn);                    // FP reciprocal estimate
+  void FRSQRTE_d(VReg vd, VReg vn);                   // FP reciprocal sqrt estimate
+  void FCSEL_d(VReg vd, VReg vn, VReg vm, Cond cc);   // FP conditional select
+  void LDR_d(VReg vt, Reg rn, int32_t offset = 0);    // Load double
+  void STR_d(VReg vt, Reg rn, int32_t offset = 0);    // Store double
+  void LDR_s(VReg vt, Reg rn, int32_t offset = 0);    // Load single
+  void STR_s(VReg vt, Reg rn, int32_t offset = 0);    // Store single
+
+  // ── Additional NEON ───────────────────────────────────────────────────
+
+  void MOV_v(VReg vd, VReg vn);                       // Copy vector
+  void MOVI_v(VReg vd, uint8_t imm8);                 // Move immediate to vector
+  void NOT_v(VReg vd, VReg vn);                       // Bitwise NOT
+  void BSL_v(VReg vd, VReg vn, VReg vm);              // Bit select
+  void BIF_v(VReg vd, VReg vn, VReg vm);              // Bit insert if false
+  void BIT_v(VReg vd, VReg vn, VReg vm);              // Bit insert if true
+  void FRINTM_4s(VReg vd, VReg vn);                   // Round toward -inf
+  void FRINTP_4s(VReg vd, VReg vn);                   // Round toward +inf
+  void FRINTZ_4s(VReg vd, VReg vn);                   // Round toward zero
+  void FRINTN_4s(VReg vd, VReg vn);                   // Round to nearest
+  void FRECPE_4s(VReg vd, VReg vn);                   // Reciprocal estimate
+  void FRSQRTE_4s(VReg vd, VReg vn);                  // Reciprocal sqrt estimate
+  void ADDV_4s(VReg vd, VReg vn);                     // Horizontal add
+  void FCMEQ_4s(VReg vd, VReg vn, VReg vm);           // Float compare equal
+  void FCMGT_4s(VReg vd, VReg vn, VReg vm);           // Float compare greater
+  void FCMGE_4s(VReg vd, VReg vn, VReg vm);           // Float compare greater-equal
+  void ADD_4s(VReg vd, VReg vn, VReg vm);             // Integer add (4x32)
+  void SUB_4s(VReg vd, VReg vn, VReg vm);             // Integer sub (4x32)
+  void MUL_4s(VReg vd, VReg vn, VReg vm);             // Integer mul (4x32)
+  void SHL_4s(VReg vd, VReg vn, uint8_t shift);       // Left shift
+  void SSHR_4s(VReg vd, VReg vn, uint8_t shift);      // Signed right shift
+  void USHR_4s(VReg vd, VReg vn, uint8_t shift);      // Unsigned right shift
+  void CMPEQ_4s(VReg vd, VReg vn, VReg vm);           // Integer compare eq
+  void CMGT_4s(VReg vd, VReg vn, VReg vm);            // Integer compare gt
+  void TBL_v(VReg vd, VReg vn, VReg vm);              // Table lookup
+  void ZIP1_4s(VReg vd, VReg vn, VReg vm);            // Interleave low
+  void ZIP2_4s(VReg vd, VReg vn, VReg vm);            // Interleave high
+  void UZP1_4s(VReg vd, VReg vn, VReg vm);            // Deinterleave even
+  void UZP2_4s(VReg vd, VReg vn, VReg vm);            // Deinterleave odd
+  void REV64_4s(VReg vd, VReg vn);                    // Reverse 32-bit elements in 64-bit
+  void EXT_v(VReg vd, VReg vn, VReg vm, uint8_t idx); // Extract from pair
+  void SMIN_4s(VReg vd, VReg vn, VReg vm);            // Signed minimum
+  void SMAX_4s(VReg vd, VReg vn, VReg vm);            // Signed maximum
+  void ABS_4s(VReg vd, VReg vn);                      // Absolute value
+  void NEG_4s(VReg vd, VReg vn);                      // Negate
+
   // ── System ────────────────────────────────────────────────────────────
 
   void NOP();
@@ -223,14 +355,6 @@ class ARM64Emitter {
 
  private:
   void Emit32(uint32_t instruction);
-
-  /// Encode commonly used instruction formats
-  uint32_t EncodeAddSub(bool is64, bool sub, bool setflags,
-                         Reg rd, Reg rn, Reg rm, Shift sh, uint8_t amount);
-  uint32_t EncodeAddSubImm(bool is64, bool sub, bool setflags,
-                            Reg rd, Reg rn, uint32_t imm12, bool shift12 = false);
-  uint32_t EncodeLogical(bool is64, uint8_t opc, Reg rd, Reg rn, Reg rm);
-  uint32_t EncodeLoadStore(bool is64, bool is_load, Reg rt, Reg rn, int32_t offset);
 
   std::vector<uint8_t> code_;
 };
