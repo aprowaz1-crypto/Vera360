@@ -88,6 +88,7 @@ class Processor {
   void Step(ThreadState* thread);
 
   backend::arm64::ARM64Backend* GetBackend() { return backend_.get(); }
+  frontend::PPCInterpreter* GetInterpreter() { return interpreter_.get(); }
   ExecMode exec_mode() const { return exec_mode_; }
 
  private:

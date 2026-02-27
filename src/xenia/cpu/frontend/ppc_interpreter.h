@@ -51,6 +51,14 @@ class PPCInterpreter {
   /// Set the HLE dispatch callback (handles kernel import thunks)
   void SetHleDispatch(HleDispatchFn fn) { hle_dispatch_ = std::move(fn); }
 
+  /// Set GPU MMIO write callback — called when guest writes to GPU register space
+  using MmioWriteFn = std::function<bool(uint32_t addr, uint32_t value)>;
+  using MmioReadFn = std::function<uint32_t(uint32_t addr)>;
+  void SetMmioHandlers(MmioWriteFn write_fn, MmioReadFn read_fn) {
+    mmio_write_ = std::move(write_fn);
+    mmio_read_ = std::move(read_fn);
+  }
+
   /// Execute a single PPC instruction at thread->pc
   InterpResult Step(ThreadState* thread);
 
@@ -126,6 +134,8 @@ class PPCInterpreter {
 
   uint8_t* guest_base_ = nullptr;
   HleDispatchFn hle_dispatch_;
+  MmioWriteFn mmio_write_;
+  MmioReadFn mmio_read_;
   std::unordered_map<uint32_t, uint32_t> thunk_map_;  // guest_addr → ordinal
   uint64_t instructions_executed_ = 0;
 };

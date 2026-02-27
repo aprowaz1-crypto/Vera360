@@ -12,6 +12,11 @@
 #include <memory>
 #include <string>
 
+#ifndef VK_USE_PLATFORM_ANDROID_KHR
+#define VK_USE_PLATFORM_ANDROID_KHR
+#endif
+#include <vulkan/vulkan.h>
+
 struct ANativeWindow;
 
 namespace xe::cpu { class Processor; }
@@ -59,6 +64,11 @@ class Emulator {
   void OnSurfaceChanged(ANativeWindow* window, int width, int height);
   void OnSurfaceDestroyed();
 
+  /// Access GPU command processor (for interpreter MMIO intercept)
+  gpu::GpuCommandProcessor* gpu_command_processor() {
+    return gpu_command_processor_.get();
+  }
+
  private:
   bool InitMemory();
   bool InitGraphics(ANativeWindow* window);
@@ -66,6 +76,7 @@ class Emulator {
   bool InitKernel();
   bool InitApu();
   bool InitHid();
+  bool InitGpuRenderer();
 
   /// Kernel HLE dispatch — called when guest executes sc
   void DispatchKernelCall(uint32_t ordinal, void* thread_state);
@@ -75,6 +86,9 @@ class Emulator {
                std::streampos file_size);
   bool LoadStfsPackage(const std::string& path);
   bool LoadDiscImage(const std::string& path);
+
+  /// Render all GPU draw calls for this frame to the swap chain
+  void RenderFrame(uint32_t image_index);
 
   bool running_ = false;
   bool game_loaded_ = false;
@@ -91,6 +105,15 @@ class Emulator {
   std::unique_ptr<gpu::vulkan::VulkanSwapChain> vulkan_swap_chain_;
   std::unique_ptr<gpu::GpuCommandProcessor> gpu_command_processor_;
   ANativeWindow* native_window_ = nullptr;
+
+  // Vulkan rendering resources
+  VkCommandPool vk_cmd_pool_ = VK_NULL_HANDLE;
+  VkCommandBuffer vk_cmd_buffer_ = VK_NULL_HANDLE;
+  VkShaderModule passthrough_vs_ = VK_NULL_HANDLE;
+  VkShaderModule passthrough_ps_ = VK_NULL_HANDLE;
+  VkPipelineLayout vk_pipeline_layout_ = VK_NULL_HANDLE;
+  VkPipeline vk_clear_pipeline_ = VK_NULL_HANDLE;
+  VkDescriptorSetLayout vk_desc_set_layout_ = VK_NULL_HANDLE;
 
   /// Instructions executed per tick (budget per frame ~16ms)
   static constexpr uint64_t kInstructionsPerTick = 500000;

@@ -7,6 +7,7 @@
  */
 
 #include "xenia/kernel/xex2_loader.h"
+#include "xenia/kernel/lzx_decoder.h"
 #include "xenia/base/logging.h"
 #include "xenia/base/memory/memory.h"
 #include "xenia/cpu/processor.h"
@@ -305,17 +306,49 @@ bool Xex2Loader::DecompressImage(const uint8_t* data, size_t size) {
     case XexCompressionType::kRaw:
       return DecompressRaw(data, size, pe_offset);
       
-    case XexCompressionType::kCompressed:
-      XELOGW("XEX2: LZX compression — using raw fallback");
-      // LZX decompression: for now, try raw copy
-      // Full LZX would require a proper LZX decoder (like the one in Xenia)
+    case XexCompressionType::kCompressed: {
+      XELOGI("XEX2: LZX compressed — attempting decompression");
+      // Parse compression info from the format header
+      uint32_t fmt_offset = 0;
+      for (auto& hdr : module_.opt_headers) {
+        if (hdr.key == kHeaderBaseFileFormat) {
+          fmt_offset = hdr.value;
+          break;
+        }
+      }
+
+      uint32_t window_bits = 17;  // Default Xbox 360 LZX window
+      uint32_t first_block_size = 0;
+
+      if (fmt_offset && fmt_offset + sizeof(Xex2FileFormatInfo) + 24 <= size) {
+        // After the format info comes the first Xex2CompressedBlockInfo
+        const uint8_t* block_info = data + fmt_offset + sizeof(Xex2FileFormatInfo);
+        first_block_size = BE32(*reinterpret_cast<const uint32_t*>(block_info));
+        // Window size is encoded in the block info area
+        // Use 128KB (window_bits=17) as standard for Xbox 360
+        XELOGD("XEX2: LZX first_block_size={}, window_bits={}", first_block_size, window_bits);
+      }
+
       if (pe_offset < size) {
-        size_t pe_size = size - pe_offset;
-        module_.pe_image.resize(module_.image_size > 0 ? module_.image_size : pe_size);
-        memcpy(module_.pe_image.data(), data + pe_offset,
-               std::min(pe_size, module_.pe_image.size()));
+        size_t compressed_size = size - pe_offset;
+        size_t uncompressed_size = module_.image_size > 0 ? module_.image_size : compressed_size * 2;
+
+        bool lzx_ok = xe::kernel::LzxDecompressXex(
+            data + pe_offset, compressed_size,
+            uncompressed_size, window_bits,
+            first_block_size, module_.pe_image);
+
+        if (!lzx_ok) {
+          XELOGW("XEX2: LZX decompression failed — falling back to raw copy");
+          module_.pe_image.resize(module_.image_size > 0 ? module_.image_size : compressed_size);
+          memcpy(module_.pe_image.data(), data + pe_offset,
+                 std::min(compressed_size, module_.pe_image.size()));
+        } else {
+          XELOGI("XEX2: LZX decompressed {} -> {} bytes", compressed_size, module_.pe_image.size());
+        }
       }
       break;
+    }
       
     default:
       XELOGE("XEX2: Unknown compression type: {}", static_cast<int>(comp));

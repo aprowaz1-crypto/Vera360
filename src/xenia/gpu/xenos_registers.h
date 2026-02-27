@@ -59,6 +59,21 @@ namespace reg {
   // Shader programs
   constexpr uint32_t SQ_PROGRAM_CNTL       = 0x2180;
   constexpr uint32_t SQ_CONTEXT_MISC       = 0x2181;
+
+  // Vertex fetch constants (VF0-VF95) — 6 DWORDs each
+  constexpr uint32_t SQ_VTX_CONSTANT_0     = 0x4800;  // Overlaps with TEX
+
+  // Custom registers used by our command processor
+  constexpr uint32_t VS_MICROCODE_ADDR     = 0x5F00;
+  constexpr uint32_t PS_MICROCODE_ADDR     = 0x5F01;
+
+  // Viewport
+  constexpr uint32_t PA_CL_VPORT_XSCALE   = 0x2110;
+  constexpr uint32_t PA_CL_VPORT_XOFFSET  = 0x2111;
+  constexpr uint32_t PA_CL_VPORT_YSCALE   = 0x2112;
+  constexpr uint32_t PA_CL_VPORT_YOFFSET  = 0x2113;
+  constexpr uint32_t PA_CL_VPORT_ZSCALE   = 0x2114;
+  constexpr uint32_t PA_CL_VPORT_ZOFFSET  = 0x2115;
 }
 
 /// Xenos primitive types

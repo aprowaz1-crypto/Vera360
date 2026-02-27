@@ -52,13 +52,25 @@ XThread* KernelState::CreateThread(uint32_t stack_size, uint32_t entry_point,
 }
 
 XThread* KernelState::GetCurrentThread() {
-  // TODO: Use TLS to find the current XThread for this host thread
+  if (current_thread_) return current_thread_;
   return threads_.empty() ? nullptr : threads_.front();
+}
+
+void KernelState::SetCurrentThread(XThread* thread) {
+  current_thread_ = thread;
 }
 
 void KernelState::TerminateThread(XThread* thread, uint32_t exit_code) {
   XELOGI("Terminating thread: handle=0x{:08X}, exit_code={}", thread->handle(), exit_code);
   thread->Terminate(exit_code);
+}
+
+size_t KernelState::GetActiveThreadCount() const {
+  size_t count = 0;
+  for (auto* t : threads_) {
+    if (!t->is_terminated() && !t->is_suspended()) count++;
+  }
+  return count;
 }
 
 XModule* KernelState::LoadModule(const std::string& path) {
@@ -81,8 +93,42 @@ XModule* KernelState::GetModule(const std::string& name) {
 }
 
 uint32_t KernelState::AllocateTLS() {
-  // TODO: implement TLS slot allocation
-  return 0;
+  std::lock_guard<std::mutex> lock(tls_mutex_);
+  return next_tls_slot_++;
+}
+
+void KernelState::FreeTLS(uint32_t slot) {
+  std::lock_guard<std::mutex> lock(tls_mutex_);
+  for (auto& [tid, slots] : tls_data_) {
+    slots.erase(slot);
+  }
+}
+
+void KernelState::SetTLSValue(uint32_t thread_id, uint32_t slot, uint64_t value) {
+  std::lock_guard<std::mutex> lock(tls_mutex_);
+  tls_data_[thread_id][slot] = value;
+}
+
+uint64_t KernelState::GetTLSValue(uint32_t thread_id, uint32_t slot) {
+  std::lock_guard<std::mutex> lock(tls_mutex_);
+  auto it = tls_data_.find(thread_id);
+  if (it == tls_data_.end()) return 0;
+  auto sit = it->second.find(slot);
+  return sit != it->second.end() ? sit->second : 0;
+}
+
+void KernelState::RegisterEvent(uint32_t handle, bool manual_reset, bool initial_state) {
+  std::lock_guard<std::mutex> lock(event_mutex_);
+  EventState es;
+  es.signaled = initial_state;
+  es.manual_reset = manual_reset;
+  event_states_[handle] = es;
+}
+
+KernelState::EventState* KernelState::GetEventState(uint32_t handle) {
+  std::lock_guard<std::mutex> lock(event_mutex_);
+  auto it = event_states_.find(handle);
+  return it != event_states_.end() ? &it->second : nullptr;
 }
 
 }  // namespace xe::kernel

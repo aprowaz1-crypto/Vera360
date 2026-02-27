@@ -545,19 +545,140 @@ void RegisterIoExports() {
     uint32_t info_class = args[7];
     uint32_t file_name_ptr = args[9];
 
-    XELOGI("NtQueryDirectoryFile: handle=0x{:08X} class={}", handle, info_class);
+    XELOGI("NtQueryDirectoryFile: handle=0x{:08X} class={} buflen={}", handle, info_class, buffer_length);
 
     auto it = g_open_files.find(handle);
     if (it == g_open_files.end() || !it->second.is_directory) {
       return STATUS_INVALID_HANDLE;
     }
 
-    // For now, return "no more files"
-    if (io_status_ptr) {
-      GW32(io_status_ptr, STATUS_NO_SUCH_FILE);
-      GW32(io_status_ptr + 4, 0);
+    auto& of = it->second;
+
+    // Read optional filename filter
+    std::string filter;
+    if (file_name_ptr) {
+      // UNICODE_STRING: Length(2), MaxLen(2), Buffer(4)
+      auto* nsp = static_cast<uint8_t*>(xe::memory::TranslateVirtual(file_name_ptr));
+      uint16_t len = (uint16_t(nsp[0]) << 8) | nsp[1];
+      uint32_t buf_ptr = GR32(file_name_ptr + 4);
+      if (buf_ptr && len > 0) {
+        auto* wstr = static_cast<uint8_t*>(xe::memory::TranslateVirtual(buf_ptr));
+        filter.reserve(len / 2);
+        for (uint16_t i = 0; i < len; i += 2) {
+          uint16_t ch = (uint16_t(wstr[i]) << 8) | wstr[i + 1];
+          if (ch < 128) filter.push_back(static_cast<char>(ch));
+          else filter.push_back('?');
+        }
+      }
     }
-    return STATUS_NO_SUCH_FILE;
+
+    // Open directory and enumerate
+    DIR* dir = opendir(of.host_path.c_str());
+    if (!dir) {
+      if (io_status_ptr) {
+        GW32(io_status_ptr, STATUS_NO_SUCH_FILE);
+        GW32(io_status_ptr + 4, 0);
+      }
+      return STATUS_NO_SUCH_FILE;
+    }
+
+    // Skip entries based on position (simple state: use position counter)
+    uint64_t skip = of.position;
+    uint64_t current = 0;
+    struct dirent* entry = nullptr;
+    bool found = false;
+
+    auto* out = static_cast<uint8_t*>(xe::memory::TranslateVirtual(buffer_ptr));
+    uint32_t bytes_written = 0;
+
+    while ((entry = readdir(dir)) != nullptr) {
+      // Skip . and ..
+      if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+
+      if (current < skip) { current++; continue; }
+
+      // Apply filter (simple wildcard: * matches all)
+      if (!filter.empty() && filter != "*" && filter != "*.*") {
+        // Basic check: if filter doesn't match the filename, skip
+        bool match = false;
+        if (filter.find('*') != std::string::npos || filter.find('?') != std::string::npos) {
+          match = true;  // Treat any wildcard as match-all for now
+        } else {
+          match = (strcasecmp(entry->d_name, filter.c_str()) == 0);
+        }
+        if (!match) { current++; continue; }
+      }
+
+      // Get file info
+      std::string full_path = of.host_path + "/" + entry->d_name;
+      struct stat st;
+      if (stat(full_path.c_str(), &st) != 0) { current++; continue; }
+
+      // Write FileBothDirectoryInformation (info_class=3) or FileDirectoryInformation (info_class=1)
+      // Both have similar layout:
+      // +0: NextEntryOffset (4, BE)
+      // +4: FileIndex (4, BE)
+      // +8: CreationTime (8, BE)
+      // +16: LastAccessTime (8, BE)
+      // +24: LastWriteTime (8, BE)
+      // +32: ChangeTime (8, BE)
+      // +40: EndOfFile (8, BE)
+      // +48: AllocationSize (8, BE)
+      // +56: FileAttributes (4, BE)
+      // +60: FileNameLength (4, BE)
+      // +64: FileName (variable, wide chars BE)
+
+      size_t name_len = strlen(entry->d_name);
+      uint32_t entry_size = 64 + static_cast<uint32_t>(name_len * 2);
+      entry_size = (entry_size + 7) & ~7u;  // Align to 8 bytes
+
+      if (bytes_written + entry_size > buffer_length) break;
+
+      memset(out + bytes_written, 0, entry_size);
+      // NextEntryOffset = 0 (last entry for now; real impl chains them)
+      GW32(buffer_ptr + bytes_written + 0, 0);
+      // FileIndex
+      GW32(buffer_ptr + bytes_written + 4, static_cast<uint32_t>(current));
+      // EndOfFile
+      uint64_t file_size = static_cast<uint64_t>(st.st_size);
+      auto* eof_p = out + bytes_written + 40;
+      for (int j = 0; j < 8; ++j) eof_p[j] = uint8_t(file_size >> ((7-j)*8));
+      // AllocationSize
+      auto* alloc_p = out + bytes_written + 48;
+      for (int j = 0; j < 8; ++j) alloc_p[j] = uint8_t(file_size >> ((7-j)*8));
+      // FileAttributes
+      uint32_t attrs = S_ISDIR(st.st_mode) ? 0x10 : 0x80;
+      GW32(buffer_ptr + bytes_written + 56, attrs);
+      // FileNameLength (in bytes, wide)
+      GW32(buffer_ptr + bytes_written + 60, static_cast<uint32_t>(name_len * 2));
+      // FileName (big-endian UTF-16)
+      auto* fname_p = out + bytes_written + 64;
+      for (size_t j = 0; j < name_len; ++j) {
+        fname_p[j * 2] = 0;
+        fname_p[j * 2 + 1] = static_cast<uint8_t>(entry->d_name[j]);
+      }
+
+      bytes_written += entry_size;
+      of.position = current + 1;
+      found = true;
+      break;  // Return one entry at a time (simplification)
+    }
+
+    closedir(dir);
+
+    if (!found) {
+      if (io_status_ptr) {
+        GW32(io_status_ptr, STATUS_NO_SUCH_FILE);
+        GW32(io_status_ptr + 4, 0);
+      }
+      return STATUS_NO_SUCH_FILE;
+    }
+
+    if (io_status_ptr) {
+      GW32(io_status_ptr, STATUS_SUCCESS);
+      GW32(io_status_ptr + 4, bytes_written);
+    }
+    return STATUS_SUCCESS;
   });
 
   // NtQueryFullAttributesFile (208)

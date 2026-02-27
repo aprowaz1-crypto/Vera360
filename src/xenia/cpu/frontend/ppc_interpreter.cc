@@ -52,6 +52,10 @@ uint16_t PPCInterpreter::ReadU16(uint32_t addr) const {
 }
 
 uint32_t PPCInterpreter::ReadU32(uint32_t addr) const {
+  // Intercept GPU MMIO reads
+  if (addr >= 0x7C800000 && addr < 0x7D000000 && mmio_read_) {
+    return mmio_read_(addr);
+  }
   uint32_t v;
   memcpy(&v, guest_base_ + addr, 4);
   return __builtin_bswap32(v);
@@ -87,6 +91,10 @@ void PPCInterpreter::WriteU16(uint32_t addr, uint16_t val) {
 }
 
 void PPCInterpreter::WriteU32(uint32_t addr, uint32_t val) {
+  // Intercept GPU MMIO writes (0x7C800000+)
+  if (addr >= 0x7C800000 && addr < 0x7D000000 && mmio_write_) {
+    if (mmio_write_(addr, val)) return;
+  }
   uint32_t be = __builtin_bswap32(val);
   memcpy(guest_base_ + addr, &be, 4);
 }

@@ -12,6 +12,7 @@
 #include "xenia/base/platform_android.h"
 #include "xenia/base/clock.h"
 #include "xenia/cpu/processor.h"
+#include "xenia/cpu/frontend/ppc_interpreter.h"
 #include "xenia/kernel/kernel_state.h"
 #include "xenia/kernel/xmodule.h"
 #include "xenia/kernel/xthread.h"
@@ -38,6 +39,7 @@ namespace xe::hid {
 #include <android/native_window.h>
 #include <fstream>
 #include <cstring>
+#include <algorithm>
 
 namespace xe {
 
@@ -57,6 +59,23 @@ bool Emulator::Initialize(ANativeWindow* window, const std::string& storage_root
   if (!InitApu()) return false;
   if (!InitHid()) return false;
 
+  // Wire GPU MMIO intercept: PPC writes to GPU register range get forwarded
+  if (processor_ && gpu_command_processor_) {
+    auto* interp = processor_->GetInterpreter();
+    if (interp) {
+      auto* gpu = gpu_command_processor_.get();
+      interp->SetMmioHandlers(
+        [gpu](uint32_t addr, uint32_t value) -> bool {
+          return gpu->HandleMmioWrite(addr, value);
+        },
+        [gpu](uint32_t addr) -> uint32_t {
+          return gpu->HandleMmioRead(addr);
+        }
+      );
+      XELOGI("GPU MMIO intercept wired to PPC interpreter");
+    }
+  }
+
   running_ = true;
   XELOGI("Emulator initialised OK");
   return true;
@@ -68,6 +87,18 @@ void Emulator::Shutdown() {
 
   XELOGI("Shutting down emulator...");
   xe::hid::Shutdown();
+
+  // Clean up Vulkan rendering resources
+  if (vulkan_device_) {
+    VkDevice dev = vulkan_device_->GetHandle();
+    if (dev) vkDeviceWaitIdle(dev);
+    if (vk_cmd_pool_) { vkDestroyCommandPool(dev, vk_cmd_pool_, nullptr); vk_cmd_pool_ = VK_NULL_HANDLE; }
+    if (passthrough_vs_) { vkDestroyShaderModule(dev, passthrough_vs_, nullptr); passthrough_vs_ = VK_NULL_HANDLE; }
+    if (passthrough_ps_) { vkDestroyShaderModule(dev, passthrough_ps_, nullptr); passthrough_ps_ = VK_NULL_HANDLE; }
+    if (vk_pipeline_layout_) { vkDestroyPipelineLayout(dev, vk_pipeline_layout_, nullptr); vk_pipeline_layout_ = VK_NULL_HANDLE; }
+    if (vk_clear_pipeline_) { vkDestroyPipeline(dev, vk_clear_pipeline_, nullptr); vk_clear_pipeline_ = VK_NULL_HANDLE; }
+    if (vk_desc_set_layout_) { vkDestroyDescriptorSetLayout(dev, vk_desc_set_layout_, nullptr); vk_desc_set_layout_ = VK_NULL_HANDLE; }
+  }
 
   gpu_command_processor_.reset();
   vulkan_swap_chain_.reset();
@@ -130,6 +161,14 @@ bool Emulator::InitGraphics(ANativeWindow* window) {
 
   // GPU command processor
   gpu_command_processor_ = std::make_unique<gpu::GpuCommandProcessor>();
+  if (vulkan_device_) {
+    gpu_command_processor_->Initialize(vulkan_device_.get());
+  }
+
+  // Create Vulkan rendering resources
+  if (vulkan_device_ && vulkan_swap_chain_) {
+    InitGpuRenderer();
+  }
 
   XELOGI("Vulkan graphics pipeline initialised");
   return true;
@@ -197,6 +236,30 @@ bool Emulator::InitApu() {
 
 bool Emulator::InitHid() {
   return xe::hid::Initialize();
+}
+
+bool Emulator::InitGpuRenderer() {
+  VkDevice device = vulkan_device_->GetHandle();
+
+  // Create command pool + buffer for frame rendering
+  VkCommandPoolCreateInfo pool_ci{};
+  pool_ci.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+  pool_ci.queueFamilyIndex = vulkan_device_->GetGraphicsFamily();
+  pool_ci.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+  if (vkCreateCommandPool(device, &pool_ci, nullptr, &vk_cmd_pool_) != VK_SUCCESS) {
+    XELOGW("Failed to create frame command pool");
+    return false;
+  }
+
+  VkCommandBufferAllocateInfo alloc_ci{};
+  alloc_ci.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+  alloc_ci.commandPool = vk_cmd_pool_;
+  alloc_ci.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+  alloc_ci.commandBufferCount = 1;
+  vkAllocateCommandBuffers(device, &alloc_ci, &vk_cmd_buffer_);
+
+  XELOGI("GPU renderer initialized (cmd pool + buffer)");
+  return true;
 }
 
 bool Emulator::LoadGame(const std::string& path) {
@@ -547,38 +610,136 @@ void Emulator::Tick() {
 
   frame_count_++;
 
-  // ── Step 1: Execute PPC instructions ──────────────────────────────────
-  // Run the interpreter for a bounded number of instructions per frame
-  auto* thread = kernel_state_ ? kernel_state_->GetCurrentThread() : nullptr;
-  if (thread && thread->is_terminated()) {
-    XELOGI("Main thread terminated with code {}", thread->exit_code());
-    running_ = false;
-    return;
-  }
+  // ── Step 1: Execute PPC instructions (round-robin scheduler) ────────
+  if (processor_ && kernel_state_) {
+    const auto& threads = kernel_state_->GetAllThreads();
+    size_t thread_count = threads.size();
+    if (thread_count > 0) {
+      // Give each runnable thread a time slice
+      size_t start_idx = kernel_state_->current_thread_index();
+      uint32_t instructions_per_thread = kInstructionsPerTick / std::max(size_t(1),
+          kernel_state_->GetActiveThreadCount());
+      if (instructions_per_thread < 1000) instructions_per_thread = 1000;
 
-  if (processor_) {
-    // Get the first CPU thread state and execute a time slice
-    auto* cpu_thread = processor_->CreateThreadState(1);
-    if (cpu_thread && cpu_thread->running) {
-      processor_->ExecuteBounded(cpu_thread, cpu_thread->pc, kInstructionsPerTick);
+      for (size_t i = 0; i < thread_count; ++i) {
+        size_t idx = (start_idx + i) % thread_count;
+        auto* thread = threads[idx];
+        if (thread->is_terminated() || thread->is_suspended()) continue;
+
+        kernel_state_->SetCurrentThread(thread);
+        auto* cpu_thread = processor_->CreateThreadState(thread->thread_id());
+        if (cpu_thread && cpu_thread->running) {
+          processor_->ExecuteBounded(cpu_thread, cpu_thread->pc, instructions_per_thread);
+        }
+      }
+      // Advance the round-robin start for next frame
+      kernel_state_->set_current_thread_index((start_idx + 1) % thread_count);
     }
   }
 
   // ── Step 2: Process GPU command buffer ────────────────────────────────
   if (gpu_command_processor_) {
-    // The GPU ring buffer write pointer is updated by guest code.
-    // For now, do nothing — real ring buffer processing requires
-    // the guest to have set up the GPU registers.
+    gpu_command_processor_->ProcessPendingCommands();
   }
 
-  // ── Step 3: Present frame via Vulkan ──────────────────────────────────
-  if (vulkan_swap_chain_) {
+  // ── Step 3: Render frame via Vulkan ───────────────────────────────────
+  if (vulkan_swap_chain_ && vulkan_device_ && vk_cmd_buffer_) {
     uint32_t image_index = 0;
     if (vulkan_swap_chain_->AcquireNextImage(&image_index)) {
-      // TODO: Record and submit actual render commands
+      RenderFrame(image_index);
       vulkan_swap_chain_->Present(image_index);
     }
   }
+
+  // Clear draw calls for next frame
+  if (gpu_command_processor_) {
+    gpu_command_processor_->ClearDrawCalls();
+  }
+}
+
+void Emulator::RenderFrame(uint32_t image_index) {
+  VkDevice device = vulkan_device_->GetHandle();
+  VkRenderPass render_pass = vulkan_swap_chain_->GetRenderPass();
+  VkFramebuffer framebuffer = vulkan_swap_chain_->GetFramebuffer(image_index);
+  VkExtent2D extent = vulkan_swap_chain_->GetExtent();
+
+  // Begin command buffer
+  VkCommandBufferBeginInfo begin_ci{};
+  begin_ci.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+  begin_ci.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+  vkResetCommandBuffer(vk_cmd_buffer_, 0);
+  vkBeginCommandBuffer(vk_cmd_buffer_, &begin_ci);
+
+  // Begin render pass — clears to dark blue (xbox-ish startup color)
+  VkClearValue clear_color{};
+  bool has_draws = gpu_command_processor_ &&
+                   !gpu_command_processor_->GetDrawCalls().empty();
+  if (has_draws) {
+    // If GPU was active, clear to black — actual rendering happened
+    clear_color.color = {{0.0f, 0.0f, 0.0f, 1.0f}};
+  } else {
+    // No GPU activity yet — show a status color (dark green = alive)
+    float pulse = static_cast<float>(frame_count_ % 120) / 120.0f;
+    clear_color.color = {{0.0f, 0.05f + pulse * 0.1f, 0.0f, 1.0f}};
+  }
+
+  VkRenderPassBeginInfo rp_begin{};
+  rp_begin.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+  rp_begin.renderPass = render_pass;
+  rp_begin.framebuffer = framebuffer;
+  rp_begin.renderArea.extent = extent;
+  rp_begin.clearValueCount = 1;
+  rp_begin.pClearValues = &clear_color;
+  vkCmdBeginRenderPass(vk_cmd_buffer_, &rp_begin, VK_SUBPASS_CONTENTS_INLINE);
+
+  // Set viewport and scissor for the full swap chain
+  VkViewport viewport{};
+  viewport.width = static_cast<float>(extent.width);
+  viewport.height = static_cast<float>(extent.height);
+  viewport.minDepth = 0.0f;
+  viewport.maxDepth = 1.0f;
+  vkCmdSetViewport(vk_cmd_buffer_, 0, 1, &viewport);
+
+  VkRect2D scissor{};
+  scissor.extent = extent;
+  vkCmdSetScissor(vk_cmd_buffer_, 0, 1, &scissor);
+
+  // TODO: For each draw call from the GPU command processor:
+  // 1. Translate Xenos vertex data from guest memory to Vulkan buffers
+  // 2. Create/fetch pipeline for the Xenos render state
+  // 3. Bind pipeline + vertex buffers + descriptors
+  // 4. Issue vkCmdDraw / vkCmdDrawIndexed
+  //
+  // For now, the render pass clears to a color so we at least get
+  // visible output proving the graphics pipeline is alive.
+
+  if (has_draws) {
+    XELOGD("Frame {}: {} draw calls from GPU (rendering pipeline active)",
+           frame_count_, gpu_command_processor_->GetDrawCalls().size());
+  }
+
+  // End render pass
+  vkCmdEndRenderPass(vk_cmd_buffer_);
+  vkEndCommandBuffer(vk_cmd_buffer_);
+
+  // Submit
+  VkSubmitInfo submit{};
+  submit.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+  submit.commandBufferCount = 1;
+  submit.pCommandBuffers = &vk_cmd_buffer_;
+
+  // Wait on image available, signal render finished
+  VkSemaphore wait_sems[] = {vulkan_swap_chain_->GetImageAvailableSemaphore()};
+  VkPipelineStageFlags wait_stages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+  VkSemaphore signal_sems[] = {vulkan_swap_chain_->GetRenderFinishedSemaphore()};
+  submit.waitSemaphoreCount = 1;
+  submit.pWaitSemaphores = wait_sems;
+  submit.pWaitDstStageMask = wait_stages;
+  submit.signalSemaphoreCount = 1;
+  submit.pSignalSemaphores = signal_sems;
+
+  vkQueueSubmit(vulkan_device_->GetGraphicsQueue(), 1, &submit,
+                vulkan_swap_chain_->GetInFlightFence());
 }
 
 void Emulator::Pause() {

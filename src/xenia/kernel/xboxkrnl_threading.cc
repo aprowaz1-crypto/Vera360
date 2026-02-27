@@ -221,16 +221,32 @@ void RegisterThreadingExports() {
     XELOGI("KeWaitForSingleObject: obj=0x{:08X} reason={} alertable={}",
            object_ptr, wait_reason, alertable);
 
-    // For now, immediately return WAIT_OBJECT_0
-    // TODO: Proper wait queue implementation
+    // Check if timeout is 0 (non-blocking poll)
     if (timeout_ptr) {
-      // Check if timeout is 0 (non-blocking poll)
       int64_t timeout_100ns;
       memcpy(&timeout_100ns, xe::memory::TranslateVirtual(timeout_ptr), 8);
       if (timeout_100ns == 0) {
-        return STATUS_TIMEOUT;  // Would block, but timeout=0
+        return STATUS_TIMEOUT;  // Would block, but timeout=0 → poll
       }
     }
+
+    // For objects tracked via handle, check event state
+    auto* state = KernelState::shared();
+    if (state) {
+      // The object_ptr might be a dispatcher header in guest memory.
+      // For NtCreateEvent-created events, check signaled state.
+      // Object_ptr points to guest DISPATCHER_HEADER: Type(1), Absolute(1), Size(1), Inserted(1), SignalState(4)...
+      auto* p = static_cast<uint8_t*>(xe::memory::TranslateVirtual(object_ptr + 4));
+      int32_t signal = (int32_t(p[0]) << 24) | (int32_t(p[1]) << 16) |
+                       (int32_t(p[2]) << 8) | int32_t(p[3]);
+      if (signal > 0) {
+        return STATUS_SUCCESS;  // Already signaled
+      }
+    }
+
+    // Not signaled — in a real emulator we'd block. For cooperative scheduling,
+    // yield and return success (approximation to prevent deadlocks)
+    std::this_thread::yield();
     return STATUS_SUCCESS;
   });
 
@@ -259,13 +275,20 @@ void RegisterThreadingExports() {
   RegisterExport(185, [](uint32_t* args) -> uint32_t {
     uint32_t handle_ptr = args[0];
     uint32_t obj_attrs_ptr = args[1];
-    uint32_t event_type = args[2];    // 0=NotificationEvent, 1=SynchronizationEvent
+    uint32_t event_type = args[2];    // 0=NotificationEvent(manual), 1=SynchronizationEvent(auto)
     uint32_t initial_state = args[3]; // TRUE/FALSE
 
     XELOGI("NtCreateEvent: type={} initial={}", event_type, initial_state);
 
     auto* state = KernelState::shared();
     uint32_t handle = state ? state->AllocateHandle() : 0x200;
+
+    // Register event state for proper signaling
+    if (state) {
+      bool manual_reset = (event_type == 0);
+      state->RegisterEvent(handle, manual_reset, initial_state != 0);
+    }
+
     if (handle_ptr) GW32(handle_ptr, handle);
 
     return STATUS_SUCCESS;
@@ -276,19 +299,47 @@ void RegisterThreadingExports() {
     uint32_t handle = args[0];
     uint32_t prev_state_ptr = args[1];
     XELOGI("NtSetEvent: handle=0x{:08X}", handle);
+
+    auto* state = KernelState::shared();
+    if (state) {
+      auto* es = state->GetEventState(handle);
+      if (es) {
+        uint32_t prev = es->signaled ? 1 : 0;
+        es->signaled = true;
+        if (prev_state_ptr) GW32(prev_state_ptr, prev);
+        return STATUS_SUCCESS;
+      }
+    }
     if (prev_state_ptr) GW32(prev_state_ptr, 0);
     return STATUS_SUCCESS;
   });
 
   // NtClearEvent (182)
   RegisterExport(182, [](uint32_t* args) -> uint32_t {
-    XELOGI("NtClearEvent: handle=0x{:08X}", args[0]);
+    uint32_t handle = args[0];
+    XELOGI("NtClearEvent: handle=0x{:08X}", handle);
+
+    auto* state = KernelState::shared();
+    if (state) {
+      auto* es = state->GetEventState(handle);
+      if (es) es->signaled = false;
+    }
     return STATUS_SUCCESS;
   });
 
   // NtPulseEvent (204)
   RegisterExport(204, [](uint32_t* args) -> uint32_t {
-    XELOGI("NtPulseEvent: handle=0x{:08X}", args[0]);
+    uint32_t handle = args[0];
+    XELOGI("NtPulseEvent: handle=0x{:08X}", handle);
+
+    auto* state = KernelState::shared();
+    if (state) {
+      auto* es = state->GetEventState(handle);
+      if (es) {
+        es->signaled = true;   // Signal briefly
+        es->signaled = false;  // Then reset
+      }
+    }
     return STATUS_SUCCESS;
   });
 
@@ -301,7 +352,9 @@ void RegisterThreadingExports() {
     uint32_t increment = args[1];
     uint32_t wait = args[2];
     XELOGI("KeSetEvent: ptr=0x{:08X} inc={} wait={}", event_ptr, increment, wait);
-    return 0;  // Previous state
+    // KeSetEvent works on a KEVENT in guest memory; we'd need to map ptr→handle
+    // For now, return previous state = 0 (not signaled)
+    return 0;
   });
 
   // KeResetEvent (144)
@@ -461,6 +514,51 @@ void RegisterThreadingExports() {
   // NtAlertThread (176)
   RegisterExport(176, [](uint32_t* args) -> uint32_t {
     return STATUS_SUCCESS;
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TLS (Thread Local Storage)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // KeTlsAlloc (— ordinal 340)
+  RegisterExport(340, [](uint32_t* args) -> uint32_t {
+    auto* state = KernelState::shared();
+    if (!state) return 0xFFFFFFFF;  // TLS_OUT_OF_INDEXES
+    uint32_t slot = state->AllocateTLS();
+    XELOGI("KeTlsAlloc: slot={}", slot);
+    return slot;
+  });
+
+  // KeTlsFree (— ordinal 341)
+  RegisterExport(341, [](uint32_t* args) -> uint32_t {
+    uint32_t slot = args[0];
+    auto* state = KernelState::shared();
+    if (state) state->FreeTLS(slot);
+    XELOGI("KeTlsFree: slot={}", slot);
+    return 1;  // TRUE
+  });
+
+  // KeTlsGetValue (— ordinal 342)
+  RegisterExport(342, [](uint32_t* args) -> uint32_t {
+    uint32_t slot = args[0];
+    auto* state = KernelState::shared();
+    if (!state) return 0;
+    auto* thread = state->GetCurrentThread();
+    uint32_t tid = thread ? thread->thread_id() : 0;
+    uint64_t value = state->GetTLSValue(tid, slot);
+    return static_cast<uint32_t>(value);
+  });
+
+  // KeTlsSetValue (— ordinal 343)
+  RegisterExport(343, [](uint32_t* args) -> uint32_t {
+    uint32_t slot = args[0];
+    uint32_t value = args[1];
+    auto* state = KernelState::shared();
+    if (!state) return 0;
+    auto* thread = state->GetCurrentThread();
+    uint32_t tid = thread ? thread->thread_id() : 0;
+    state->SetTLSValue(tid, slot, value);
+    return 1;  // TRUE
   });
 
   XELOGI("Registered xboxkrnl threading exports");
